@@ -17,4 +17,5 @@ export default defineConfig({
   security: {
     allowedDomains: allowedHosts,
   },
+  vite: { ssr: { external: ["astro/app/node"] } },
 });

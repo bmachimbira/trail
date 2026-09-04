@@ -26,7 +26,7 @@ Production:
 
 ```sh
 npm run build
-npm start          # serves the built app (HOST/PORT env respected)
+npm start          # serves the built app via server.mjs (HOST/PORT env respected)
 ```
 
 ## Configuration (environment variables)
