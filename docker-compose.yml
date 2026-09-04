@@ -1,0 +1,14 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - uploads:/data
+volumes:
+  uploads:

@@ -1,0 +1,505 @@
+---
+import Layout from "../layouts/Layout.astro";
+
+// One warm-toned backdrop per page load — WeTransfer-style daily rotation,
+// but self-hosted so the service stays fully offline-friendly.
+const BACKGROUNDS = [1, 2, 3, 4, 5].map((n) => `/backgrounds/bg-${n}.jpg`);
+const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
+---
+
+<Layout title="Trail — send a file">
+  <div class="backdrop" aria-hidden="true">
+    <img src={backdrop} alt="" decoding="async" />
+  </div>
+  <section class="hero reveal" style="--i: 1">
+    <p class="kicker">Send &amp; share</p>
+    <h1>Send a file</h1>
+    <p class="hero-sub">
+      Drop anything in. You get a link worth passing along — one that quietly
+      expires, so nobody's file lives forever.
+    </p>
+  </section>
+
+  <section class="drop reveal" style="--i: 2" id="dropzone" aria-label="Upload a file">
+    <svg class="drop-mark" width="34" height="34" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 4v13m0 0 5-5m-5 5-5-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M5 20h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+    </svg>
+    <p class="drop-title">Drop it here</p>
+    <p class="drop-sub">or <button class="linkish" id="pick" type="button">browse your files</button></p>
+    <p class="drop-hint mono" id="dz-hint" role="status"></p>
+    <input type="file" id="file-input" class="hidden" />
+  </section>
+
+  <section class="progress hidden" id="progress-card" aria-live="polite">
+    <div class="progress-head">
+      <p class="progress-label">Sending <span id="progress-name"></span></p>
+      <p class="mono progress-pct" id="progress-pct">0%</p>
+    </div>
+    <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+  </section>
+
+  <section class="result hidden" id="result-card">
+    <p class="result-title">Sent<span class="result-dot">.</span></p>
+    <div class="link-row">
+      <input type="text" id="share-link" readonly class="mono" aria-label="Share link" />
+      <button class="btn btn-primary" id="copy" type="button">Copy</button>
+    </div>
+    <p class="result-sub">
+      Live for <span id="result-expiry"></span> —
+      <a id="result-open" href="/">open the share page</a>
+    </p>
+  </section>
+
+  <section class="recent reveal" style="--i: 3" id="files-section">
+    <h2>Recently sent</h2>
+    <ul class="file-list" id="file-list"></ul>
+    <p class="empty" id="files-empty">
+      Nothing sent yet. Drop a file above and its link will settle here.
+    </p>
+  </section>
+</Layout>
+
+<style>
+  /* ── Backdrop ─────────────────────────────────────────── */
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .backdrop img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0.6;
+    mix-blend-mode: multiply;
+  }
+  /* Paper scrim: keeps ink legible over any image. */
+  .backdrop::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      to bottom,
+      color-mix(in oklch, var(--paper) 62%, transparent),
+      color-mix(in oklch, var(--paper) 22%, transparent) 42%,
+      color-mix(in oklch, var(--paper) 58%, transparent)
+    );
+  }
+
+  /* ── Hero ─────────────────────────────────────────────── */
+  .hero {
+    padding: clamp(2rem, 6vw, 3.8rem) 0 clamp(1.6rem, 4vw, 2.4rem);
+  }
+  .hero h1 {
+    font-family: var(--serif);
+    font-weight: 580;
+    font-size: clamp(2.7rem, 7.5vw, 4.3rem);
+    line-height: 1.02;
+    letter-spacing: -0.018em;
+    margin: 0 0 1rem;
+  }
+  .hero h1::after {
+    content: ".";
+    color: var(--accent);
+  }
+  .hero-sub {
+    max-width: 34ch;
+    color: var(--ink-2);
+    margin: 0;
+    font-size: 1.05rem;
+  }
+
+  /* ── Dropzone ─────────────────────────────────────────── */
+  .drop {
+    text-align: center;
+    padding: clamp(2.2rem, 6vw, 3.4rem) 1.5rem;
+    background: var(--paper);
+    border: 1.5px dashed var(--line-2);
+    border-radius: 10px;
+    transition:
+      border-color 0.18s var(--ease-out),
+      background-color 0.18s var(--ease-out),
+      transform 0.18s var(--ease-out);
+  }
+  .drop:hover,
+  .drop.drag {
+    border-color: var(--accent);
+    background: var(--paper-2);
+  }
+  .drop.drag {
+    transform: scale(1.008);
+  }
+  .drop-mark {
+    color: var(--ink-3);
+    margin: 0 0 0.4rem;
+    transition: color 0.18s var(--ease-out);
+  }
+  .drop:hover .drop-mark,
+  .drop.drag .drop-mark {
+    color: var(--accent);
+  }
+  .drop-title {
+    font-family: var(--serif);
+    font-weight: 560;
+    font-size: 1.5rem;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.2rem;
+  }
+  .drop-sub {
+    margin: 0;
+    color: var(--ink-3);
+  }
+  .drop-hint {
+    margin: 0.9rem 0 0;
+    color: var(--danger);
+    min-height: 1em;
+  }
+
+  /* ── Progress ─────────────────────────────────────────── */
+  .progress {
+    padding: 1.6rem 0 0.4rem;
+  }
+  .progress-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+  }
+  .progress-label {
+    margin: 0 0 0.7rem;
+    color: var(--ink-2);
+  }
+  .progress-label span {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .progress-pct {
+    color: var(--ink-3);
+  }
+  .bar {
+    height: 5px;
+    background: var(--line);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    background: var(--accent);
+    transform-origin: left center;
+    transform: scaleX(0);
+    transition: transform 0.2s var(--ease-out);
+  }
+
+  /* ── Result ───────────────────────────────────────────── */
+  .result {
+    padding: 2rem 0 0.6rem;
+  }
+  .result-title {
+    font-family: var(--serif);
+    font-weight: 580;
+    font-size: 2.1rem;
+    letter-spacing: -0.012em;
+    margin: 0 0 1rem;
+  }
+  .result-dot {
+    color: var(--accent);
+  }
+  .link-row {
+    display: flex;
+    gap: 0.6rem;
+  }
+  .link-row input {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    padding: 0.65rem 0.9rem;
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: var(--paper-2);
+    color: var(--ink-2);
+  }
+  .link-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+    color: var(--ink);
+  }
+  .result-sub {
+    margin: 0.8rem 0 0;
+    color: var(--ink-3);
+    font-size: 0.92rem;
+  }
+
+  /* ── Recent ───────────────────────────────────────────── */
+  .recent {
+    padding-top: clamp(2.4rem, 6vw, 3.6rem);
+  }
+  .recent h2 {
+    font-family: var(--serif);
+    font-weight: 580;
+    font-size: 1.45rem;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.4rem;
+  }
+  .empty {
+    color: var(--ink-3);
+    padding: 1.6rem 0;
+    margin: 0;
+    border-top: 1px solid var(--line);
+  }
+</style>
+
+<!-- Rows are created at runtime, so their styles must be unscoped. -->
+<style is:global>
+  .file-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.9rem 0.35rem 0.9rem 0.1rem;
+    border-top: 1px solid var(--line);
+    transition: background-color 0.15s var(--ease-out);
+  }
+  .row:hover {
+    background: color-mix(in oklch, var(--paper-2) 70%, transparent);
+  }
+  .row:last-child {
+    border-bottom: 1px solid var(--line);
+  }
+  .row-ext {
+    flex: none;
+    width: 3.1rem;
+    text-align: center;
+    padding: 0.34rem 0.2rem;
+    border: 1px solid var(--line-2);
+    border-radius: 5px;
+    color: var(--ink-2);
+    text-transform: uppercase;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .row-name {
+    margin: 0;
+    font-weight: 600;
+    font-size: 0.98rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row-meta {
+    margin: 0.15rem 0 0;
+    color: var(--ink-3);
+    font-size: 0.82rem;
+  }
+  .row-actions {
+    display: flex;
+    gap: 0.45rem;
+    flex: none;
+  }
+  .row-actions .btn {
+    padding: 0.42rem 0.8rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
+  @media (max-width: 540px) {
+    .row {
+      flex-wrap: wrap;
+    }
+    .row-actions {
+      width: 100%;
+      justify-content: flex-end;
+      margin-top: 0.4rem;
+    }
+  }
+</style>
+
+<script>
+  const dropzone = document.getElementById("dropzone") as HTMLDivElement;
+  const pick = document.getElementById("pick") as HTMLButtonElement;
+  const fileInput = document.getElementById("file-input") as HTMLInputElement;
+  const progressCard = document.getElementById("progress-card") as HTMLElement;
+  const progressName = document.getElementById("progress-name") as HTMLElement;
+  const progressPct = document.getElementById("progress-pct") as HTMLElement;
+  const barFill = document.getElementById("bar-fill") as HTMLDivElement;
+  const resultCard = document.getElementById("result-card") as HTMLElement;
+  const shareLink = document.getElementById("share-link") as HTMLInputElement;
+  const copyBtn = document.getElementById("copy") as HTMLButtonElement;
+  const resultExpiry = document.getElementById("result-expiry") as HTMLElement;
+  const resultOpen = document.getElementById("result-open") as HTMLAnchorElement;
+  const fileList = document.getElementById("file-list") as HTMLUListElement;
+  const filesEmpty = document.getElementById("files-empty") as HTMLParagraphElement;
+  const dzHint = document.getElementById("dz-hint") as HTMLElement;
+
+  interface UploadResponse {
+    id: string;
+    filename: string;
+    size: number;
+    expiresAt: string;
+    downloadUrl: string;
+  }
+  interface FileRecord {
+    id: string;
+    filename: string;
+    size: number;
+    uploadedAt: string;
+    expiresAt: string;
+    downloads: number;
+  }
+
+  const fmtBytes = (n: number): string => {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  };
+
+  const fmtExpiry = (iso: string): string => {
+    const ms = Date.parse(iso) - Date.now();
+    if (ms <= 0) return "expired";
+    const hours = ms / 3_600_000;
+    if (hours < 1) return `${Math.max(1, Math.round(ms / 60_000))} min`;
+    if (hours < 48) return `${Math.round(hours)} h`;
+    return `${Math.round(hours / 24)} days`;
+  };
+
+  const extOf = (name: string): string => {
+    const dot = name.lastIndexOf(".");
+    if (dot <= 0 || dot === name.length - 1) return "file";
+    return name.slice(dot + 1, dot + 5);
+  };
+
+  async function refreshList() {
+    const res = await fetch("/api/files");
+    const { files } = (await res.json()) as { files: FileRecord[] };
+    fileList.replaceChildren();
+    filesEmpty.classList.toggle("hidden", files.length > 0);
+    files.slice(0, 12).forEach((f, i) => {
+      const li = document.createElement("li");
+      li.className = "row reveal";
+      li.style.setProperty("--i", String(Math.min(i, 7)));
+
+      const ext = document.createElement("span");
+      ext.className = "row-ext mono";
+      ext.textContent = extOf(f.filename);
+
+      const main = document.createElement("div");
+      main.className = "row-main";
+      const name = document.createElement("p");
+      name.className = "row-name";
+      name.textContent = f.filename;
+      const meta = document.createElement("p");
+      meta.className = "row-meta";
+      meta.textContent =
+        `${fmtBytes(f.size)} · ${f.downloads} download${f.downloads === 1 ? "" : "s"} · ${fmtExpiry(f.expiresAt)} left`;
+      main.append(name, meta);
+
+      const actions = document.createElement("div");
+      actions.className = "row-actions";
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "btn btn-ghost";
+      copy.textContent = "Copy link";
+      copy.addEventListener("click", () => {
+        void navigator.clipboard.writeText(`${location.origin}/f/${f.id}`);
+        copy.textContent = "Copied";
+        setTimeout(() => (copy.textContent = "Copy link"), 1400);
+      });
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "btn btn-ghost danger";
+      del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        await fetch(`/api/files/${f.id}`, { method: "DELETE" });
+        void refreshList();
+      });
+      actions.append(copy, del);
+
+      li.append(ext, main, actions);
+      fileList.appendChild(li);
+    });
+  }
+
+  function upload(file: File) {
+    dzHint.textContent = "";
+    progressName.textContent = `“${file.name}”`;
+    progressPct.textContent = "0%";
+    barFill.style.transform = "scaleX(0)";
+    progressCard.classList.remove("hidden");
+    resultCard.classList.add("hidden");
+
+    const form = new FormData();
+    form.append("file", file);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload");
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable) {
+        const pct = Math.round((e.loaded / e.total) * 100);
+        barFill.style.transform = `scaleX(${pct / 100})`;
+        progressPct.textContent = `${pct}%`;
+      }
+    });
+    xhr.addEventListener("load", () => {
+      progressCard.classList.add("hidden");
+      if (xhr.status !== 201) {
+        let message = "Something went wrong sending that.";
+        try {
+          const body = JSON.parse(xhr.responseText) as { error?: string; maxBytes?: number };
+          if (body.error === "payload_too_large") {
+            message = `That file is past the ${fmtBytes(body.maxBytes ?? 0)} limit.`;
+          }
+        } catch {}
+        dzHint.textContent = message;
+        return;
+      }
+      const record = JSON.parse(xhr.responseText) as UploadResponse;
+      shareLink.value = `${location.origin}/f/${record.id}`;
+      resultExpiry.textContent = fmtExpiry(record.expiresAt);
+      resultOpen.href = `/f/${record.id}`;
+      resultCard.classList.remove("hidden");
+      resultCard.classList.add("reveal");
+      void refreshList();
+    });
+    xhr.addEventListener("error", () => {
+      progressCard.classList.add("hidden");
+      dzHint.textContent = "The upload didn't go through.";
+    });
+    xhr.send(form);
+  }
+
+  pick.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files?.[0]) upload(fileInput.files[0]);
+    fileInput.value = "";
+  });
+  dropzone.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    dropzone.classList.add("drag");
+  });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("drag");
+    const file = e.dataTransfer?.files?.[0];
+    if (file) upload(file);
+  });
+  shareLink.addEventListener("click", () => shareLink.select());
+  copyBtn.addEventListener("click", async () => {
+    await navigator.clipboard.writeText(shareLink.value);
+    copyBtn.textContent = "Copied";
+    setTimeout(() => (copyBtn.textContent = "Copy"), 1400);
+  });
+
+  void refreshList();
+</script>

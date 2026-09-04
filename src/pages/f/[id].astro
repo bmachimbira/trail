@@ -1,0 +1,158 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import { Effect } from "effect";
+import { isTransferError } from "../../lib/http.js";
+import { runApp } from "../../lib/runtime.js";
+import { FileTransfer } from "../../lib/transfer.js";
+import type { TransferRecord } from "../../lib/meta.js";
+
+const { id } = Astro.params;
+
+const effect = Effect.gen(function* () {
+  const transfer = yield* FileTransfer;
+  return yield* transfer.find(id ?? "");
+});
+const outcome = await runApp(effect);
+
+let state: "missing" | "expired" | "ok" = "missing";
+let record: TransferRecord | undefined;
+if (!isTransferError(outcome) && outcome !== undefined) {
+  record = outcome;
+  state = Date.parse(outcome.expiresAt) < Date.now() ? "expired" : "ok";
+}
+if (state === "missing") Astro.response.status = 404;
+if (state === "expired") Astro.response.status = 410;
+
+const fmtBytes = (n: number): string => {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+};
+const fmtDate = (iso: string): string =>
+  new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+---
+
+<Layout title={record ? `${record.filename} — Trail` : "Trail"}>
+  {
+    state === "ok" && record && (
+      <article class="share">
+        <p class="kicker reveal" style="--i:1">Shared with you</p>
+        <h1 class="filename reveal" style="--i:2" title={record.filename}>
+          {record.filename}
+        </h1>
+        <dl class="facts reveal" style="--i:3">
+          <div>
+            <dt>Size</dt>
+            <dd>{fmtBytes(record.size)}</dd>
+          </div>
+          <div>
+            <dt>Sent</dt>
+            <dd>{fmtDate(record.uploadedAt)}</dd>
+          </div>
+          <div>
+            <dt>Expires</dt>
+            <dd>{fmtDate(record.expiresAt)}</dd>
+          </div>
+          <div>
+            <dt>Downloads</dt>
+            <dd>{record.downloads}</dd>
+          </div>
+        </dl>
+        <div class="actions reveal" style="--i:4">
+          <a class="btn btn-primary" href={`/api/files/${record.id}`} download>
+            Download<span class="mono dl-size">· {fmtBytes(record.size)}</span>
+          </a>
+        </div>
+        <p class="quiet mono reveal" style="--i:5">
+          this link expires {fmtDate(record.expiresAt)} — after that, it&rsquo;s gone
+        </p>
+      </article>
+    )
+  }
+  {
+    state === "expired" && (
+      <article class="share">
+        <p class="kicker reveal" style="--i:1">Expired</p>
+        <h1 class="filename reveal" style="--i:2">This link has expired.</h1>
+        <p class="plain reveal" style="--i:3">
+          The file&rsquo;s time is up. Ask whoever sent it for a fresh link.
+        </p>
+      </article>
+    )
+  }
+  {
+    state === "missing" && (
+      <article class="share">
+        <p class="kicker reveal" style="--i:1">Not found</p>
+        <h1 class="filename reveal" style="--i:2">Nothing here.</h1>
+        <p class="plain reveal" style="--i:3">
+          This link doesn&rsquo;t match any file — it may have been deleted by its sender.
+        </p>
+      </article>
+    )
+  }
+</Layout>
+
+<style>
+  .share {
+    padding: clamp(2.5rem, 8vw, 5rem) 0 0;
+    max-width: 36rem;
+  }
+  .filename {
+    font-family: var(--serif);
+    font-weight: 580;
+    font-size: clamp(1.9rem, 5.5vw, 3.1rem);
+    line-height: 1.08;
+    letter-spacing: -0.015em;
+    margin: 0 0 2rem;
+    word-break: break-word;
+  }
+  /* Spec-sheet facts: hairline-marked columns, no boxes. */
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+    gap: 1.2rem 1.4rem;
+    margin: 0 0 2.6rem;
+  }
+  .facts div {
+    border-left: 1px solid var(--line-2);
+    padding-left: 0.85rem;
+  }
+  .facts dt {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .facts dd {
+    margin: 0.3rem 0 0;
+    font-weight: 600;
+    font-size: 1.02rem;
+  }
+  .actions {
+    margin: 0 0 1.1rem;
+  }
+  .btn-primary {
+    font-size: 1.05rem;
+    padding: 0.8rem 1.6rem;
+  }
+  .dl-size {
+    color: color-mix(in oklch, var(--on-accent) 75%, transparent);
+    font-size: 0.78rem;
+  }
+  .quiet {
+    color: var(--ink-3);
+  }
+  .plain {
+    color: var(--ink-2);
+    max-width: 38ch;
+    font-size: 1.05rem;
+  }
+</style>

@@ -1,0 +1,35 @@
+{
+  "name": "trail",
+  "version": "0.1.0",
+  "description": "Trail — a self-hosted file transfer service built with Astro and Effect",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "start": "node ./dist/server/entry.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@astrojs/node": "^9.0.0",
+    "@aws-sdk/client-s3": "^3.1126.0",
+    "@aws-sdk/s3-request-presigner": "^3.1126.0",
+    "@effect/platform": "^0.90.0",
+    "@effect/platform-node": "^0.95.0",
+    "@fontsource-variable/fraunces": "^5.3.0",
+    "@fontsource-variable/karla": "^5.3.0",
+    "astro": "^5.0.0",
+    "effect": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "s3rver": "^3.7.1",
+    "typescript": "^7.0.2",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.17.1"
+  }
+}
