@@ -38,10 +38,16 @@ export const LocalKVLive = Layer.effect(
         ),
       );
 
+    // Atomic write: tmp file + rename, so a crash mid-write can't leave a
+    // truncated meta.json. A crash between the two leaves a harmless .tmp file.
     const write = (key: string, content: string) =>
-      fs
-        .writeFileString(fileFor(key), content)
-        .pipe(Effect.mapError((cause) => new MetaError({ op: "write", cause })));
+      Effect.gen(function* () {
+        const tmp = fileFor(`${key}.${globalThis.crypto.randomUUID()}.tmp`);
+        yield* fs.writeFileString(tmp, content);
+        yield* fs
+          .rename(tmp, fileFor(key))
+          .pipe(Effect.onError(() => fs.remove(tmp, { force: true }).pipe(Effect.ignoreLogged)));
+      }).pipe(Effect.mapError((cause) => new MetaError({ op: "write", cause })));
 
     return { read, write } satisfies KeyValueStoreService;
   }),
