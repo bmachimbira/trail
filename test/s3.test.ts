@@ -50,7 +50,15 @@ const importRoutes = async () => {
   return { listFiles, upload, getFile: fileRoute.GET, deleteFile: fileRoute.DELETE };
 };
 
-const asContext = (obj: unknown) => obj as never;
+// Minimal AstroCookies stand-in: one jar shared across the file's requests.
+const jar = new Map<string, string>();
+const cookies = {
+  get: (k: string) => (jar.has(k) ? { value: jar.get(k) } : undefined),
+  set: (k: string, v: string) => void jar.set(k, v),
+  has: (k: string) => jar.has(k),
+  delete: (k: string) => void jar.delete(k),
+};
+const asContext = (obj: unknown) => ({ cookies, ...(obj as object) }) as never;
 
 describe("S3 driver (s3rver)", () => {
   it("uploads through the route into the bucket", async () => {
@@ -62,7 +70,8 @@ describe("S3 driver (s3rver)", () => {
 
     const res = await upload(asContext({ request }));
     expect(res.status).toBe(201);
-    const body = (await res.json()) as { id: string; filename: string; downloadUrl: string };
+    const bundle = (await res.json()) as { files: Array<{ id: string; filename: string }> };
+    const body = bundle.files[0] ?? { id: "", filename: "" };
     expect(body.filename).toBe("s3-check.txt");
 
     // Blob and metadata both live in the bucket.
@@ -88,7 +97,7 @@ describe("S3 driver (s3rver)", () => {
         request: new Request("http://localhost/api/upload", { method: "POST", body: fd }),
       }),
     );
-    const { id } = (await uploaded.json()) as { id: string };
+    const id = ((await uploaded.json()) as { files: Array<{ id: string }> }).files[0]?.id ?? "";
 
     const redirect = await getFile(asContext({ params: { id } }));
     expect(redirect.status).toBe(302);
@@ -103,8 +112,10 @@ describe("S3 driver (s3rver)", () => {
 
     // Counter incremented server-side even though bytes went bucket→client.
     const listed = await listFiles(asContext({}));
-    const { files } = (await listed.json()) as { files: Array<{ id: string; downloads: number }> };
-    expect(files.find((f) => f.id === id)?.downloads).toBe(1);
+    const { bundles } = (await listed.json()) as {
+      bundles: Array<{ files: Array<{ id: string; downloads: number }> }>;
+    };
+    expect(bundles.flatMap((b) => b.files).find((f) => f.id === id)?.downloads).toBe(1);
   });
 
   it("deletes the blob and metadata, then 404s", async () => {
@@ -117,7 +128,7 @@ describe("S3 driver (s3rver)", () => {
         request: new Request("http://localhost/api/upload", { method: "POST", body: fd }),
       }),
     );
-    const { id } = (await uploaded.json()) as { id: string };
+    const id = ((await uploaded.json()) as { files: Array<{ id: string }> }).files[0]?.id ?? "";
 
     expect((await deleteFile(asContext({ params: { id } }))).status).toBe(204);
 

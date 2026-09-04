@@ -9,11 +9,22 @@ import {
 } from "./errors.js";
 import { TransferMeta, type TransferRecord } from "./meta.js";
 import { FileStorage } from "./storage.js";
+import { zipStream } from "./zip.js";
 
 export interface UploadInput {
   readonly filename: string;
   readonly contentType: string;
   readonly content: Stream.Stream<Uint8Array, unknown>;
+  readonly ownerId: string;
+  readonly bundleId: string;
+}
+
+/** Files uploaded together: one share link, one expiry. */
+export interface Bundle {
+  readonly id: string;
+  readonly uploadedAt: string;
+  readonly expiresAt: string;
+  readonly files: ReadonlyArray<TransferRecord>;
 }
 
 export type DownloadResult =
@@ -26,12 +37,32 @@ export type DownloadResult =
 
 export interface FileTransferService {
   readonly upload: (input: UploadInput) => Effect.Effect<TransferRecord, TransferError>;
-  readonly list: () => Effect.Effect<ReadonlyArray<TransferRecord>, MetaError>;
+  /** Live transfers owned by `ownerId`, newest first. */
+  readonly list: (ownerId: string) => Effect.Effect<ReadonlyArray<TransferRecord>, MetaError>;
   readonly find: (id: string) => Effect.Effect<TransferRecord | undefined, MetaError>;
   readonly download: (
     id: string,
   ) => Effect.Effect<DownloadResult, NotFoundError | ExpiredError | StorageError | MetaError>;
-  readonly remove: (id: string) => Effect.Effect<void, NotFoundError | StorageError | MetaError>;
+  /** Delete a transfer the caller owns; anyone else gets NotFound, not Forbidden. */
+  readonly remove: (
+    id: string,
+    ownerId: string,
+  ) => Effect.Effect<void, NotFoundError | StorageError | MetaError>;
+  /** Live bundles owned by `ownerId`, newest first. */
+  readonly listBundles: (ownerId: string) => Effect.Effect<ReadonlyArray<Bundle>, MetaError>;
+  /** A bundle by id, expired or not; the caller decides what expiry means. */
+  readonly bundle: (id: string) => Effect.Effect<Bundle | undefined, MetaError>;
+  readonly removeBundle: (
+    id: string,
+    ownerId: string,
+  ) => Effect.Effect<void, NotFoundError | StorageError | MetaError>;
+  /** All files of a live bundle as one zip stream; counts a download on each. */
+  readonly downloadBundle: (
+    id: string,
+  ) => Effect.Effect<
+    { readonly bundle: Bundle; readonly content: Stream.Stream<Uint8Array, StorageError> },
+    NotFoundError | ExpiredError | StorageError | MetaError
+  >;
   /** Delete expired transfers (blob + metadata). Returns how many were reaped. */
   readonly sweepExpired: () => Effect.Effect<number, MetaError>;
 }
@@ -42,6 +73,43 @@ export class FileTransfer extends Context.Tag("trail/FileTransfer")<
 >() {}
 
 const randomId = () => globalThis.crypto.randomUUID().replaceAll("-", "").slice(0, 16);
+export const newBundleId = randomId;
+
+const bundleOf = (record: TransferRecord) => record.bundleId ?? record.id;
+
+/** Group newest-first records into bundles, keeping that order. */
+const groupBundles = (records: ReadonlyArray<TransferRecord>): Bundle[] => {
+  const byId = new Map<string, TransferRecord[]>();
+  for (const record of records) {
+    const files = byId.get(bundleOf(record));
+    if (files === undefined) byId.set(bundleOf(record), [record]);
+    else files.push(record);
+  }
+  // Records arrive newest-first; inside a bundle, upload order reads better.
+  return [...byId].map(([id, newestFirst]) => {
+    const files = [...newestFirst].reverse();
+    return {
+      id,
+      uploadedAt: files[0]?.uploadedAt ?? "",
+      expiresAt: files.reduce((max, f) => (f.expiresAt > max ? f.expiresAt : max), ""),
+      files,
+    };
+  });
+};
+
+/** Zip entries need distinct names; a repeat becomes "name (2).ext". */
+const uniqueNames = (files: ReadonlyArray<TransferRecord>): string[] => {
+  const seen = new Map<string, number>();
+  return files.map((f) => {
+    const n = (seen.get(f.filename) ?? 0) + 1;
+    seen.set(f.filename, n);
+    if (n === 1) return f.filename;
+    const dot = f.filename.lastIndexOf(".");
+    return dot > 0
+      ? `${f.filename.slice(0, dot)} (${n})${f.filename.slice(dot)}`
+      : `${f.filename} (${n})`;
+  });
+};
 
 const sanitizeFilename = (name: string) => {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters from filenames is the point
@@ -74,6 +142,8 @@ export const FileTransferLive = Layer.effect(
           uploadedAt: now.toISOString(),
           expiresAt: new Date(now.getTime() + config.ttlMs).toISOString(),
           downloads: 0,
+          ownerId: input.ownerId,
+          bundleId: input.bundleId,
         };
         yield* meta.upsert(record).pipe(
           // Never leave an unreferenced blob when metadata persistence fails.
@@ -82,11 +152,11 @@ export const FileTransferLive = Layer.effect(
         return record;
       });
 
-    const list = () =>
+    const list = (ownerId: string) =>
       meta.list().pipe(
         Effect.map((records) => {
           const now = Date.now();
-          return records.filter((r) => !isExpired(r, now));
+          return records.filter((r) => r.ownerId === ownerId && !isExpired(r, now));
         }),
       );
 
@@ -110,12 +180,51 @@ export const FileTransferLive = Layer.effect(
         return { kind: "stream" as const, record: counted, content };
       });
 
-    const remove = (id: string) =>
+    const remove = (id: string, ownerId: string) =>
       Effect.gen(function* () {
         const record = yield* meta.find(id);
-        if (record === undefined) return yield* new NotFoundError({ id });
+        if (record === undefined || record.ownerId !== ownerId) {
+          return yield* new NotFoundError({ id });
+        }
         yield* storage.remove(id);
         yield* meta.remove(id);
+      });
+
+    const listBundles = (ownerId: string) => list(ownerId).pipe(Effect.map(groupBundles));
+
+    const bundle = (id: string) =>
+      meta.list().pipe(
+        Effect.map((records) => {
+          const files = records.filter((r) => bundleOf(r) === id);
+          return files.length === 0 ? undefined : groupBundles(files)[0];
+        }),
+      );
+
+    const removeBundle = (id: string, ownerId: string) =>
+      Effect.gen(function* () {
+        const records = yield* meta.list();
+        const files = records.filter((r) => bundleOf(r) === id && r.ownerId === ownerId);
+        if (files.length === 0) return yield* new NotFoundError({ id });
+        yield* Effect.forEach(files, (f) => Effect.zipRight(storage.remove(f.id), meta.remove(f.id)), {
+          discard: true,
+        });
+      });
+
+    const downloadBundle = (id: string) =>
+      Effect.gen(function* () {
+        const found = yield* bundle(id);
+        if (found === undefined) return yield* new NotFoundError({ id });
+        if (Date.parse(found.expiresAt) < Date.now()) return yield* new ExpiredError({ id });
+        const names = uniqueNames(found.files);
+        const entries = yield* Effect.forEach(found.files, (f, i) =>
+          storage.get(f.id).pipe(Effect.map((content) => ({ name: names[i] ?? f.filename, content }))),
+        );
+        yield* Effect.forEach(
+          found.files,
+          (f) => meta.update(f.id, (r) => ({ ...r, downloads: r.downloads + 1 })),
+          { discard: true },
+        );
+        return { bundle: found, content: zipStream(entries) };
       });
 
     const sweepExpired = () =>
@@ -141,7 +250,18 @@ export const FileTransferLive = Layer.effect(
         Effect.map((counts) => counts.reduce((a, b) => a + b, 0)),
       );
 
-    return { upload, list, find, download, remove, sweepExpired } satisfies FileTransferService;
+    return {
+      upload,
+      list,
+      find,
+      download,
+      remove,
+      listBundles,
+      bundle,
+      removeBundle,
+      downloadBundle,
+      sweepExpired,
+    } satisfies FileTransferService;
   }),
 );
 

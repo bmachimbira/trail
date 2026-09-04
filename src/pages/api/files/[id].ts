@@ -2,6 +2,7 @@ import type { APIRoute } from "astro";
 import { Effect, Stream } from "effect";
 import { contentDisposition, errorToResponse, isTransferError } from "../../../lib/http.js";
 import { runApp } from "../../../lib/runtime.js";
+import { sessionId } from "../../../lib/session.js";
 import { FileTransfer } from "../../../lib/transfer.js";
 
 export const GET: APIRoute = async ({ params }) => {
@@ -34,11 +35,12 @@ export const GET: APIRoute = async ({ params }) => {
   });
 };
 
-export const DELETE: APIRoute = async ({ params }) => {
+export const DELETE: APIRoute = async ({ params, cookies }) => {
   const id = params.id ?? "";
+  const owner = sessionId(cookies);
   const effect = Effect.gen(function* () {
     const transfer = yield* FileTransfer;
-    return yield* transfer.remove(id);
+    return yield* transfer.remove(id, owner);
   });
 
   const outcome = await runApp(effect);

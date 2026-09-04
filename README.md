@@ -77,13 +77,17 @@ PUTs are the natural next step.
 
 | Method   | Path              | Description                                        |
 | -------- | ----------------- | -------------------------------------------------- |
-| `POST`   | `/api/upload`     | Multipart form field `file` → 201 + transfer record |
-| `GET`    | `/api/files`      | List transfers, newest first                        |
-| `GET`    | `/api/files/<id>` | Download the file (`404` missing, `410` expired)    |
-| `DELETE` | `/api/files/<id>` | Delete blob + metadata (`204`, `404` if missing)    |
+| `POST`   | `/api/upload`           | One or more multipart `file` fields → 201 + bundle `{ id, shareUrl, files }` |
+| `GET`    | `/api/files`            | Bundles owned by the caller's session, newest first |
+| `GET`    | `/api/files/<id>`       | Download one file (`404` missing, `410` expired)    |
+| `DELETE` | `/api/files/<id>`       | Delete one file you own (`204`, `404` otherwise)    |
+| `GET`    | `/api/bundles/<id>/zip` | Every file in the bundle as a zip (public by link)  |
+| `DELETE` | `/api/bundles/<id>`     | Delete a bundle you own (`204`, `404` otherwise)    |
 
 Mutating requests must pass Astro's origin check: browsers send this
-automatically; for `curl` add `-H "Origin: http://<host>:<port>"`.
+automatically; for `curl` add `-H "Origin: http://<host>:<port>"`. Ownership
+rides on the `trail_session` cookie, minted on first contact, so keep a cookie
+jar (`-c jar -b jar`) across `curl` calls to list or delete what you sent.
 
 When `AUTH_TOKEN` is set, `POST /api/upload`, `GET /api/files`, and
 `DELETE /api/files/<id>` additionally require `-H "Authorization: Bearer

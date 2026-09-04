@@ -2,24 +2,28 @@
 import { Effect } from "effect";
 import Layout from "../../layouts/Layout.astro";
 import { isTransferError } from "../../lib/http.js";
-import type { TransferRecord } from "../../lib/meta.js";
 import { runApp } from "../../lib/runtime.js";
-import { FileTransfer } from "../../lib/transfer.js";
+import { type Bundle, FileTransfer } from "../../lib/transfer.js";
 
 const { id } = Astro.params;
 
 const effect = Effect.gen(function* () {
   const transfer = yield* FileTransfer;
-  return yield* transfer.find(id ?? "");
+  return yield* transfer.bundle(id ?? "");
 });
 const outcome = await runApp(effect);
 
 let state: "missing" | "expired" | "ok" = "missing";
-let record: TransferRecord | undefined;
+let bundle: Bundle | undefined;
 if (!isTransferError(outcome) && outcome !== undefined) {
-  record = outcome;
+  bundle = outcome;
   state = Date.parse(outcome.expiresAt) < Date.now() ? "expired" : "ok";
 }
+const files = bundle?.files ?? [];
+const single = files.length === 1 ? files[0] : undefined;
+const title = single ? single.filename : `${files.length} files`;
+const totalSize = files.reduce((n, f) => n + f.size, 0);
+const downloads = files.reduce((n, f) => n + f.downloads, 0);
 if (state === "missing") Astro.response.status = 404;
 if (state === "expired") Astro.response.status = 410;
 
@@ -38,39 +42,57 @@ const fmtDate = (iso: string): string =>
   });
 ---
 
-<Layout title={record ? `${record.filename} — Trail` : "Trail"}>
+<Layout title={bundle ? `${title} — Trail` : "Trail"}>
   {
-    state === "ok" && record && (
+    state === "ok" && bundle && (
       <article class="share">
         <p class="kicker reveal" style="--i:1">Shared with you</p>
-        <h1 class="filename reveal" style="--i:2" title={record.filename}>
-          {record.filename}
+        <h1 class="filename reveal" style="--i:2" title={title}>
+          {title}
         </h1>
         <dl class="facts reveal" style="--i:3">
           <div>
             <dt>Size</dt>
-            <dd>{fmtBytes(record.size)}</dd>
+            <dd>{fmtBytes(totalSize)}</dd>
           </div>
           <div>
             <dt>Sent</dt>
-            <dd>{fmtDate(record.uploadedAt)}</dd>
+            <dd>{fmtDate(bundle.uploadedAt)}</dd>
           </div>
           <div>
             <dt>Expires</dt>
-            <dd>{fmtDate(record.expiresAt)}</dd>
+            <dd>{fmtDate(bundle.expiresAt)}</dd>
           </div>
           <div>
             <dt>Downloads</dt>
-            <dd>{record.downloads}</dd>
+            <dd>{downloads}</dd>
           </div>
         </dl>
-        <div class="actions reveal" style="--i:4">
-          <a class="btn btn-primary" href={`/api/files/${record.id}`} download>
-            Download<span class="mono dl-size">· {fmtBytes(record.size)}</span>
-          </a>
+        {!single && (
+          <ul class="file-rows reveal" style="--i:4">
+            {files.map((f) => (
+              <li>
+                <span class="file-name" title={f.filename}>{f.filename}</span>
+                <a class="file-dl mono" href={`/api/files/${f.id}`} download>
+                  {fmtBytes(f.size)} ↓
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div class="actions reveal" style="--i:5">
+          {single ? (
+            <a class="btn btn-primary" href={`/api/files/${single.id}`} download>
+              Download<span class="mono dl-size">· {fmtBytes(single.size)}</span>
+            </a>
+          ) : (
+            <a class="btn btn-primary" href={`/api/bundles/${bundle.id}/zip`} download>
+              Download all<span class="mono dl-size">· {fmtBytes(totalSize)} zip</span>
+            </a>
+          )}
         </div>
-        <p class="quiet mono reveal" style="--i:5">
-          this link expires {fmtDate(record.expiresAt)} — after that, it&rsquo;s gone
+        <p class="quiet mono reveal" style="--i:6">
+          this link expires {fmtDate(bundle.expiresAt)} — after that, it&rsquo;s gone
         </p>
       </article>
     )
@@ -100,6 +122,34 @@ const fmtDate = (iso: string): string =>
 </Layout>
 
 <style>
+  .file-rows {
+    list-style: none;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    border-top: 1px solid var(--line);
+  }
+  .file-rows li {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .file-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-dl {
+    flex: none;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.85rem;
+  }
+  .file-dl:hover {
+    text-decoration: underline;
+  }
   .share {
     padding: clamp(2.5rem, 8vw, 5rem) 0 0;
     max-width: 36rem;

@@ -1,5 +1,6 @@
 import type { TransferError } from "./errors.js";
 import type { TransferRecord } from "./meta.js";
+import type { Bundle } from "./transfer.js";
 
 const errorTags = new Set([
   "NotFoundError",
@@ -15,6 +16,20 @@ export const isTransferError = (u: unknown): u is TransferError =>
   "_tag" in u &&
   typeof (u as { _tag: unknown })._tag === "string" &&
   errorTags.has((u as { _tag: string })._tag);
+
+/** API shape of a record: everything but the owning session id. */
+export const publicRecord = ({ ownerId: _owner, ...rest }: TransferRecord) => ({
+  ...rest,
+  downloadUrl: `/api/files/${rest.id}`,
+});
+
+export const publicBundle = (bundle: Bundle) => ({
+  id: bundle.id,
+  uploadedAt: bundle.uploadedAt,
+  expiresAt: bundle.expiresAt,
+  shareUrl: `/f/${bundle.id}`,
+  files: bundle.files.map(publicRecord),
+});
 
 export const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {

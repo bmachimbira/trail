@@ -1,5 +1,9 @@
 ---
 import Layout from "../layouts/Layout.astro";
+import { sessionId } from "../lib/session.js";
+
+// Mint the session on the first page view so the very first upload is owned.
+sessionId(Astro.cookies);
 
 // One warm-toned backdrop per page load — WeTransfer-style daily rotation,
 // but self-hosted so the service stays fully offline-friendly.
@@ -13,22 +17,22 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? 
   </div>
   <section class="hero reveal" style="--i: 1">
     <p class="kicker">Send &amp; share</p>
-    <h1>Send a file</h1>
+    <h1>Send files</h1>
     <p class="hero-sub">
       Drop anything in. You get a link worth passing along — one that quietly
       expires, so nobody's file lives forever.
     </p>
   </section>
 
-  <section class="drop reveal" style="--i: 2" id="dropzone" aria-label="Upload a file">
+  <section class="drop reveal" style="--i: 2" id="dropzone" aria-label="Upload files">
     <svg class="drop-mark" width="34" height="34" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="M12 4v13m0 0 5-5m-5 5-5-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
       <path d="M5 20h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
     </svg>
-    <p class="drop-title">Drop it here</p>
+    <p class="drop-title">Drop them here</p>
     <p class="drop-sub">or <button class="linkish" id="pick" type="button">browse your files</button></p>
     <p class="drop-hint mono" id="dz-hint" role="status"></p>
-    <input type="file" id="file-input" class="hidden" />
+    <input type="file" id="file-input" class="hidden" multiple />
   </section>
 
   <section class="progress hidden" id="progress-card" aria-live="polite">
@@ -390,13 +394,6 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? 
     tokenHint.classList.add("hidden");
   };
 
-  interface UploadResponse {
-    id: string;
-    filename: string;
-    size: number;
-    expiresAt: string;
-    downloadUrl: string;
-  }
   interface FileRecord {
     id: string;
     filename: string;
@@ -404,6 +401,13 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? 
     uploadedAt: string;
     expiresAt: string;
     downloads: number;
+  }
+  interface BundleRecord {
+    id: string;
+    uploadedAt: string;
+    expiresAt: string;
+    shareUrl: string;
+    files: FileRecord[];
   }
 
   const fmtBytes = (n: number): string => {
@@ -436,17 +440,27 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? 
     }
     if (!res.ok) return;
     hideTokenPrompt();
-    const { files } = (await res.json()) as { files: FileRecord[] };
+    const { bundles } = (await res.json()) as { bundles: BundleRecord[] };
     fileList.replaceChildren();
-    filesEmpty.classList.toggle("hidden", files.length > 0);
-    files.slice(0, 12).forEach((f, i) => {
+    filesEmpty.classList.toggle("hidden", bundles.length > 0);
+    bundles.slice(0, 12).forEach((b, i) => {
+      const first = b.files[0];
+      if (!first) return;
+      const f = {
+        id: b.id,
+        filename:
+          b.files.length === 1 ? first.filename : `${first.filename} + ${b.files.length - 1} more`,
+        size: b.files.reduce((n, x) => n + x.size, 0),
+        downloads: b.files.reduce((n, x) => n + x.downloads, 0),
+        expiresAt: b.expiresAt,
+      };
       const li = document.createElement("li");
       li.className = "row reveal";
       li.style.setProperty("--i", String(Math.min(i, 7)));
 
       const ext = document.createElement("span");
       ext.className = "row-ext mono";
-      ext.textContent = extOf(f.filename);
+      ext.textContent = b.files.length === 1 ? extOf(first.filename) : `${b.files.length}×`;
 
       const main = document.createElement("div");
       main.className = "row-main";
@@ -475,7 +489,7 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? 
       del.className = "btn btn-ghost danger";
       del.textContent = "Delete";
       del.addEventListener("click", async () => {
-        const res = await fetch(`/api/files/${f.id}`, {
+        const res = await fetch(`/api/bundles/${f.id}`, {
           method: "DELETE",
           headers: authHeader(),
         });
@@ -489,16 +503,17 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? 
     });
   }
 
-  function upload(file: File) {
+  function upload(files: File[]) {
     dzHint.textContent = "";
-    progressName.textContent = `“${file.name}”`;
+    progressName.textContent =
+      files.length === 1 && files[0] ? `“${files[0].name}”` : `${files.length} files`;
     progressPct.textContent = "0%";
     barFill.style.transform = "scaleX(0)";
     progressCard.classList.remove("hidden");
     resultCard.classList.add("hidden");
 
     const form = new FormData();
-    form.append("file", file);
+    for (const file of files) form.append("file", file);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/upload");
     if (token !== "") xhr.setRequestHeader("Authorization", `Bearer ${token}`);
@@ -527,10 +542,10 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? 
         dzHint.textContent = message;
         return;
       }
-      const record = JSON.parse(xhr.responseText) as UploadResponse;
-      shareLink.value = `${location.origin}/f/${record.id}`;
-      resultExpiry.textContent = fmtExpiry(record.expiresAt);
-      resultOpen.href = `/f/${record.id}`;
+      const bundle = JSON.parse(xhr.responseText) as BundleRecord;
+      shareLink.value = `${location.origin}${bundle.shareUrl}`;
+      resultExpiry.textContent = fmtExpiry(bundle.expiresAt);
+      resultOpen.href = bundle.shareUrl;
       resultCard.classList.remove("hidden");
       resultCard.classList.add("reveal");
       void refreshList();
@@ -544,7 +559,8 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? 
 
   pick.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => {
-    if (fileInput.files?.[0]) upload(fileInput.files[0]);
+    const files = Array.from(fileInput.files ?? []);
+    if (files.length > 0) upload(files);
     fileInput.value = "";
   });
   dropzone.addEventListener("dragover", (e) => {
@@ -555,8 +571,8 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? 
   dropzone.addEventListener("drop", (e) => {
     e.preventDefault();
     dropzone.classList.remove("drag");
-    const file = e.dataTransfer?.files?.[0];
-    if (file) upload(file);
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length > 0) upload(files);
   });
   shareLink.addEventListener("click", () => shareLink.select());
   tokenForm.addEventListener("submit", (e) => {

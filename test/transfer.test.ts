@@ -65,8 +65,17 @@ const runTest = <A, E>(
   ).finally(() => rmSync(dir, { recursive: true, force: true }));
 };
 
-const uploadBytes = (transfer: FileTransferService, bytes: number[], filename = "notes.txt") =>
+const OWNER = "session-a";
+
+const uploadBytes = (
+  transfer: FileTransferService,
+  bytes: number[],
+  filename = "notes.txt",
+  bundleId = "bundle-a",
+) =>
   transfer.upload({
+    ownerId: OWNER,
+    bundleId,
     filename,
     contentType: "text/plain",
     content: Stream.fromIterable([new Uint8Array(bytes)]),
@@ -77,7 +86,7 @@ describe("FileTransfer", () => {
     const result = await runTest({}, (transfer) =>
       Effect.gen(function* () {
         const record = yield* uploadBytes(transfer, [104, 105]);
-        const listed = yield* transfer.list();
+        const listed = yield* transfer.list(OWNER);
         const fetched = yield* transfer.download(record.id);
         if (fetched.kind !== "stream")
           throw new Error(`expected stream download, got ${fetched.kind}`);
@@ -150,6 +159,8 @@ describe("FileTransfer", () => {
           const transfer = yield* FileTransfer;
           return yield* Effect.either(
             transfer.upload({
+              ownerId: OWNER,
+              bundleId: "bundle-a",
               filename: "chunked.bin",
               contentType: "application/octet-stream",
               content: Stream.fromIterable([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]),
@@ -220,7 +231,7 @@ describe("FileTransfer", () => {
     const result = await runTest({ ttlMs: -60_000 }, (transfer) =>
       Effect.gen(function* () {
         const record = yield* uploadBytes(transfer, [1]);
-        const listed = yield* transfer.list();
+        const listed = yield* transfer.list(OWNER);
         const gotten = yield* Effect.either(transfer.download(record.id));
         return { record, listed, gotten };
       }),
@@ -239,7 +250,7 @@ describe("FileTransfer", () => {
         const transfer = yield* FileTransfer;
         const record = yield* uploadBytes(transfer, [1, 2, 3], "old.bin");
         const reaped = yield* transfer.sweepExpired();
-        const listed = yield* transfer.list();
+        const listed = yield* transfer.list(OWNER);
         const found = yield* transfer.find(record.id);
         return { record, reaped, listed, found };
       }).pipe(Effect.provide(Live), Effect.scoped),
@@ -256,7 +267,7 @@ describe("FileTransfer", () => {
       Effect.gen(function* () {
         yield* uploadBytes(transfer, [1]);
         const reaped = yield* transfer.sweepExpired();
-        const listed = yield* transfer.list();
+        const listed = yield* transfer.list(OWNER);
         return { reaped, listed };
       }),
     );
@@ -268,8 +279,8 @@ describe("FileTransfer", () => {
     const result = await runTest({}, (transfer) =>
       Effect.gen(function* () {
         const record = yield* uploadBytes(transfer, [1]);
-        yield* transfer.remove(record.id);
-        const listed = yield* transfer.list();
+        yield* transfer.remove(record.id, OWNER);
+        const listed = yield* transfer.list(OWNER);
         const gotten = yield* Effect.either(transfer.download(record.id));
         return { listed, gotten };
       }),
@@ -279,6 +290,53 @@ describe("FileTransfer", () => {
     if (result.gotten._tag === "Left") {
       expect(result.gotten.left).toMatchObject({ _tag: "NotFoundError" });
     }
+  });
+
+  it("hides and protects transfers from other sessions", async () => {
+    await runTest({}, (transfer) =>
+      Effect.gen(function* () {
+        const record = yield* uploadBytes(transfer, [1]);
+        expect(yield* transfer.list("session-b")).toEqual([]);
+        const denied = yield* Effect.either(transfer.remove(record.id, "session-b"));
+        expect(denied._tag).toBe("Left");
+        expect((yield* transfer.list(OWNER)).map((r) => r.id)).toEqual([record.id]);
+        // Download is by link, so a stranger can still fetch it.
+        expect((yield* transfer.download(record.id)).record.id).toBe(record.id);
+      }),
+    );
+  });
+
+  it("groups files uploaded together into one bundle and zips them", async () => {
+    await runTest({}, (transfer) =>
+      Effect.gen(function* () {
+        const a = yield* uploadBytes(transfer, [104, 105], "a.txt", "b1");
+        const b = yield* uploadBytes(transfer, [1, 2, 3], "a.txt", "b1");
+        yield* uploadBytes(transfer, [7], "solo.bin", "b2");
+
+        const bundles = yield* transfer.listBundles(OWNER);
+        expect(bundles.map((x) => [x.id, x.files.length])).toEqual([
+          ["b2", 1],
+          ["b1", 2],
+        ]);
+        expect(yield* transfer.listBundles("session-b")).toEqual([]);
+
+        const zipped = yield* transfer.downloadBundle("b1");
+        const zip = Buffer.concat([...(yield* Stream.runCollect(zipped.content))]);
+        expect(zip.readUInt32LE(0)).toBe(0x04034b50);
+        expect(zip.readUInt32LE(zip.length - 22)).toBe(0x06054b50);
+        expect(zip.readUInt16LE(zip.length - 12)).toBe(2);
+        // Duplicate names inside a bundle get a suffix rather than clobbering.
+        expect(zip.includes(Buffer.from("a (2).txt"))).toBe(true);
+        expect((yield* transfer.find(a.id))?.downloads).toBe(1);
+        expect((yield* transfer.find(b.id))?.downloads).toBe(1);
+
+        const denied = yield* Effect.either(transfer.removeBundle("b1", "session-b"));
+        expect(denied._tag).toBe("Left");
+        yield* transfer.removeBundle("b1", OWNER);
+        expect((yield* transfer.listBundles(OWNER)).map((x) => x.id)).toEqual(["b2"]);
+        expect(yield* transfer.bundle("b1")).toBeUndefined();
+      }),
+    );
   });
 
   it("sanitizes hostile filenames", async () => {

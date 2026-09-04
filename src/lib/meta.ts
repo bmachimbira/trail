@@ -12,6 +12,10 @@ export interface TransferRecord {
   /** ISO 8601 timestamp after which the transfer is no longer downloadable. */
   readonly expiresAt: string;
   readonly downloads: number;
+  /** Session that uploaded it; absent on records from before sessions existed. */
+  readonly ownerId?: string;
+  /** Files uploaded together share one id and one share link; absent = its own bundle. */
+  readonly bundleId?: string;
 }
 
 export interface TransferMetaService {

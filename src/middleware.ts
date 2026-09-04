@@ -6,7 +6,7 @@ import { isAuthorized } from "./lib/auth.js";
 const isManagement = (pathname: string, method: string): boolean =>
   pathname === "/api/upload" ||
   pathname === "/api/files" ||
-  (/^\/api\/files\/[^/]+$/.test(pathname) && method !== "GET" && method !== "HEAD");
+  (/^\/api\/(files|bundles)\/[^/]+$/.test(pathname) && method !== "GET" && method !== "HEAD");
 
 export const onRequest = defineMiddleware(({ request, url }, next) => {
   if (!isManagement(url.pathname, request.method)) return next();
