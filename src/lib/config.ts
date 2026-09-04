@@ -22,6 +22,8 @@ export interface AppConfigService {
   /** Blob storage backend: local filesystem or S3-compatible. */
   readonly storageDriver: "local" | "s3";
   readonly s3: S3Settings;
+  /** Session that adopts ownerless uploads (from before sessions) at boot, as one bundle. */
+  readonly adoptOrphansTo: string | undefined;
 }
 
 export class AppConfig extends Context.Tag("trail/AppConfig")<AppConfig, AppConfigService>() {}
@@ -50,6 +52,11 @@ export const AppConfigLive = Layer.effect(
         Config.map((m) => m * 60 * 1000),
       ),
       storageDriver: driver,
+      adoptOrphansTo: yield* Config.string("ADOPT_ORPHANS_TO").pipe(
+        Config.map((s) => s.trim()),
+        Config.map((s) => (s === "" ? undefined : s)),
+        Config.withDefault(undefined),
+      ),
       s3: {
         bucket: yield* Config.string("S3_BUCKET").pipe(Config.withDefault("trail")),
         region: yield* Config.string("S3_REGION").pipe(Config.withDefault("us-east-1")),

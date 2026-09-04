@@ -7,7 +7,12 @@ import { type KeyValueStore, LocalKVLive } from "./kv.js";
 import { type TransferMeta, TransferMetaLive } from "./meta.js";
 import { FileStorageS3Live, S3ClientLive, S3KVLive } from "./s3.js";
 import { type FileStorage, FileStorageLive } from "./storage.js";
-import { ExpirySweeperLive, type FileTransfer, FileTransferLive } from "./transfer.js";
+import {
+  ExpirySweeperLive,
+  type FileTransfer,
+  FileTransferLive,
+  OrphanAdoptionLive,
+} from "./transfer.js";
 
 // Storage driver picked by STORAGE_DRIVER: both stacks satisfy the same
 // service tags. With S3, blobs, presigned redirects and meta.json live in
@@ -30,6 +35,7 @@ export const AppLive = Layer.mergeAll(
   // Layer references are memoized within a build, so the sweeper shares the
   // same FileTransfer/TransferMeta instances the routes use.
   ExpirySweeperLive.pipe(Layer.provide(FileTransferLive), Layer.provide(TransferMetaLive)),
+  OrphanAdoptionLive.pipe(Layer.provide(TransferMetaLive)),
 ).pipe(
   Layer.provideMerge(StorageStack),
   Layer.provideMerge(AppConfigLive),

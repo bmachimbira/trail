@@ -265,6 +265,34 @@ export const FileTransferLive = Layer.effect(
   }),
 );
 
+/**
+ * Give every record that predates sessions (no ownerId) to `ownerId`, grouped
+ * as one bundle. Returns how many were adopted; idempotent once they're owned.
+ */
+export const adoptOrphans = (ownerId: string) =>
+  Effect.gen(function* () {
+    const meta = yield* TransferMeta;
+    const orphans = (yield* meta.list()).filter((r) => r.ownerId === undefined);
+    if (orphans.length === 0) return 0;
+    const bundleId = newBundleId();
+    yield* Effect.forEach(orphans, (r) => meta.update(r.id, (cur) => ({ ...cur, ownerId, bundleId })), {
+      discard: true,
+    });
+    yield* Effect.logInfo("adopted orphaned uploads", { count: orphans.length, ownerId, bundleId });
+    return orphans.length;
+  });
+
+/** Runs adoptOrphans once at boot when ADOPT_ORPHANS_TO is set. */
+export const OrphanAdoptionLive = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const config = yield* AppConfig;
+    if (config.adoptOrphansTo === undefined) return;
+    yield* adoptOrphans(config.adoptOrphansTo).pipe(
+      Effect.catchAll((error) => Effect.logWarning("orphan adoption failed", { error })),
+    );
+  }),
+);
+
 /** Reaps expired transfers at boot and then on an interval; failures are logged, never fatal. */
 export const ExpirySweeperLive = Layer.scopedDiscard(
   Effect.gen(function* () {

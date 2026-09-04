@@ -45,6 +45,7 @@ npm start          # serves the built app (HOST/PORT env respected)
 | `S3_PREFIX`               | `trail`     | S3 driver: key prefix (`<prefix>/blobs/<id>`, `meta.json`) |
 | `DOWNLOAD_URL_TTL_MINUTES`| `60`        | S3 driver: presigned download URL lifetime (capped by transfer TTL) |
 | `ALLOWED_HOSTS`           | —           | Extra trusted hostnames (comma-separated) for Astro's origin check |
+| `ADOPT_ORPHANS_TO`        | —           | Session id that adopts uploads from before sessions existed, as one bundle, at boot |
 | `AUTH_TOKEN`              | —           | When set, upload/list/delete require `Authorization: Bearer <token>` |
 
 AWS credentials come from the default SDK chain (`AWS_ACCESS_KEY_ID` etc.,

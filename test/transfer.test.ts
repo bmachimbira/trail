@@ -11,7 +11,7 @@ import type { TransferRecord } from "../src/lib/meta.js";
 import { TransferMeta, TransferMetaLive, type TransferMetaService } from "../src/lib/meta.js";
 import { type FileStorage, FileStorageLive } from "../src/lib/storage.js";
 import type { FileTransferService } from "../src/lib/transfer.js";
-import { FileTransfer, FileTransferLive } from "../src/lib/transfer.js";
+import { adoptOrphans, FileTransfer, FileTransferLive } from "../src/lib/transfer.js";
 
 interface TestCfg {
   readonly maxUploadBytes?: number;
@@ -27,6 +27,7 @@ const makeLive = (cfg: TestCfg = {}, dir = mkdtempSync(join(tmpdir(), "trail-tes
     ttlMs: cfg.ttlMs ?? 60_000,
     storageDriver: "local" as const,
     sweepIntervalMs: 60_000,
+    adoptOrphansTo: undefined,
     s3: {
       bucket: "unused",
       region: "us-east-1",
@@ -188,6 +189,7 @@ describe("FileTransfer", () => {
       uploadDir: dir,
       maxUploadBytes: 1024,
       ttlMs: 60_000,
+      adoptOrphansTo: undefined,
       storageDriver: "local" as const,
       sweepIntervalMs: 60_000,
       s3: {
@@ -335,6 +337,34 @@ describe("FileTransfer", () => {
         yield* transfer.removeBundle("b1", OWNER);
         expect((yield* transfer.listBundles(OWNER)).map((x) => x.id)).toEqual(["b2"]);
         expect(yield* transfer.bundle("b1")).toBeUndefined();
+      }),
+    );
+  });
+
+  it("adopts ownerless records into one bundle for a session", async () => {
+    await runTest({}, (transfer) =>
+      Effect.gen(function* () {
+        const meta = yield* TransferMeta;
+        const legacy = (id: string): TransferRecord => ({
+          id,
+          filename: `${id}.bin`,
+          contentType: "application/octet-stream",
+          size: 1,
+          uploadedAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          downloads: 0,
+        });
+        yield* meta.upsert(legacy("old1"));
+        yield* meta.upsert(legacy("old2"));
+        const mine = yield* uploadBytes(transfer, [1], "mine.txt", "b-mine");
+
+        expect(yield* adoptOrphans("session-z")).toBe(2);
+        const bundles = yield* transfer.listBundles("session-z");
+        expect(bundles).toHaveLength(1);
+        expect(bundles[0]?.files.map((f) => f.id).sort()).toEqual(["old1", "old2"]);
+        // Already-owned records are untouched, and a second run is a no-op.
+        expect((yield* transfer.find(mine.id))?.ownerId).toBe(OWNER);
+        expect(yield* adoptOrphans("session-z")).toBe(0);
       }),
     );
   });

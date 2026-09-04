@@ -11,6 +11,7 @@ const makeLive = (dir: string) => {
   const ConfigTest = Layer.succeed(AppConfig, {
     uploadDir: dir,
     maxUploadBytes: 1024,
+    adoptOrphansTo: undefined,
     ttlMs: 60_000,
     sweepIntervalMs: 60_000,
     storageDriver: "local" as const,
