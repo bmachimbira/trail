@@ -4,7 +4,7 @@ import Layout from "../layouts/Layout.astro";
 // One warm-toned backdrop per page load — WeTransfer-style daily rotation,
 // but self-hosted so the service stays fully offline-friendly.
 const BACKGROUNDS = [1, 2, 3, 4, 5].map((n) => `/backgrounds/bg-${n}.jpg`);
-const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
+const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)] ?? BACKGROUNDS[0];
 ---
 
 <Layout title="Trail — send a file">
@@ -54,6 +54,11 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
   <section class="recent reveal" style="--i: 3" id="files-section">
     <h2>Recently sent</h2>
     <ul class="file-list" id="file-list"></ul>
+    <form class="token-row hidden" id="token-form">
+      <input type="password" id="token-input" class="mono" placeholder="Access token" aria-label="Access token" autocomplete="off" />
+      <button class="btn btn-ghost" type="submit">Unlock</button>
+    </form>
+    <p class="token-hint mono hidden" id="token-hint" role="alert">That token didn&rsquo;t work — try again.</p>
     <p class="empty" id="files-empty">
       Nothing sent yet. Drop a file above and its link will settle here.
     </p>
@@ -250,6 +255,31 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
     margin: 0;
     border-top: 1px solid var(--line);
   }
+  .token-row {
+    display: flex;
+    gap: 0.6rem;
+    padding: 1.2rem 0 0.2rem;
+    border-top: 1px solid var(--line);
+  }
+  .token-row input {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.85rem;
+    padding: 0.65rem 0.9rem;
+    border: 1px solid var(--line-2);
+    border-radius: 6px;
+    background: var(--paper-2);
+    color: var(--ink-2);
+  }
+  .token-row input:focus {
+    outline: none;
+    border-color: var(--accent);
+    color: var(--ink);
+  }
+  .token-hint {
+    color: var(--danger);
+    margin: 0.5rem 0 0;
+  }
 </style>
 
 <!-- Rows are created at runtime, so their styles must be unscoped. -->
@@ -341,6 +371,24 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
   const fileList = document.getElementById("file-list") as HTMLUListElement;
   const filesEmpty = document.getElementById("files-empty") as HTMLParagraphElement;
   const dzHint = document.getElementById("dz-hint") as HTMLElement;
+  const tokenForm = document.getElementById("token-form") as HTMLFormElement;
+  const tokenInput = document.getElementById("token-input") as HTMLInputElement;
+  const tokenHint = document.getElementById("token-hint") as HTMLElement;
+
+  let token = localStorage.getItem("trail-token") ?? "";
+
+  const authHeader = (): Record<string, string> =>
+    token === "" ? {} : { Authorization: `Bearer ${token}` };
+
+  const showTokenPrompt = (badToken: boolean) => {
+    tokenForm.classList.remove("hidden");
+    tokenHint.classList.toggle("hidden", !badToken);
+    filesEmpty.classList.add("hidden");
+  };
+  const hideTokenPrompt = () => {
+    tokenForm.classList.add("hidden");
+    tokenHint.classList.add("hidden");
+  };
 
   interface UploadResponse {
     id: string;
@@ -381,7 +429,13 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
   };
 
   async function refreshList() {
-    const res = await fetch("/api/files");
+    const res = await fetch("/api/files", { headers: authHeader() });
+    if (res.status === 401) {
+      showTokenPrompt(token !== "");
+      return;
+    }
+    if (!res.ok) return;
+    hideTokenPrompt();
     const { files } = (await res.json()) as { files: FileRecord[] };
     fileList.replaceChildren();
     filesEmpty.classList.toggle("hidden", files.length > 0);
@@ -421,7 +475,11 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
       del.className = "btn btn-ghost danger";
       del.textContent = "Delete";
       del.addEventListener("click", async () => {
-        await fetch(`/api/files/${f.id}`, { method: "DELETE" });
+        const res = await fetch(`/api/files/${f.id}`, {
+          method: "DELETE",
+          headers: authHeader(),
+        });
+        if (res.status === 401) showTokenPrompt(true);
         void refreshList();
       });
       actions.append(copy, del);
@@ -443,6 +501,7 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
     form.append("file", file);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/upload");
+    if (token !== "") xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     xhr.upload.addEventListener("progress", (e) => {
       if (e.lengthComputable) {
         const pct = Math.round((e.loaded / e.total) * 100);
@@ -452,6 +511,11 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
     });
     xhr.addEventListener("load", () => {
       progressCard.classList.add("hidden");
+      if (xhr.status === 401) {
+        dzHint.textContent = "This instance needs the access token — unlock below.";
+        showTokenPrompt(token !== "");
+        return;
+      }
       if (xhr.status !== 201) {
         let message = "Something went wrong sending that.";
         try {
@@ -495,6 +559,16 @@ const backdrop = BACKGROUNDS[Math.floor(Math.random() * BACKGROUNDS.length)]!;
     if (file) upload(file);
   });
   shareLink.addEventListener("click", () => shareLink.select());
+  tokenForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const value = tokenInput.value.trim();
+    if (value === "") return;
+    token = value;
+    localStorage.setItem("trail-token", token);
+    tokenInput.value = "";
+    hideTokenPrompt();
+    void refreshList();
+  });
   copyBtn.addEventListener("click", async () => {
     await navigator.clipboard.writeText(shareLink.value);
     copyBtn.textContent = "Copied";

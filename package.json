@@ -9,6 +9,9 @@
     "build": "astro build",
     "preview": "astro preview",
     "start": "node ./dist/server/entry.mjs",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -24,6 +27,7 @@
     "effect": "^3.0.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.12",
     "@types/node": "^24.0.0",
     "s3rver": "^3.7.1",
     "typescript": "^7.0.2",

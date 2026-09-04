@@ -1,6 +1,7 @@
 // @ts-check
-import { defineConfig } from "astro/config";
+
 import node from "@astrojs/node";
+import { defineConfig } from "astro/config";
 
 // Host header validation + CSRF origin checks trust these domains (any port).
 // Add public hostnames via the ALLOWED_HOSTS env var (comma-separated).

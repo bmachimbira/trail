@@ -50,10 +50,6 @@ const importRoutes = async () => {
   return { listFiles, upload, getFile: fileRoute.GET, deleteFile: fileRoute.DELETE };
 };
 
-type UploadHandler = Awaited<ReturnType<typeof importRoutes>>["upload"];
-type GetHandler = Awaited<ReturnType<typeof importRoutes>>["getFile"];
-type DeleteHandler = Awaited<ReturnType<typeof importRoutes>>["deleteFile"];
-
 const asContext = (obj: unknown) => obj as never;
 
 describe("S3 driver (s3rver)", () => {
@@ -71,10 +67,14 @@ describe("S3 driver (s3rver)", () => {
 
     // Blob and metadata both live in the bucket.
     const probe = new S3Client({ region: "us-east-1", endpoint, forcePathStyle: true });
-    const blob = await probe.send(new GetObjectCommand({ Bucket: BUCKET, Key: `trail/blobs/${body.id}` }));
-    expect(new Uint8Array(await blob.Body!.transformToByteArray())).toEqual(bytes);
+    const blob = await probe.send(
+      new GetObjectCommand({ Bucket: BUCKET, Key: `trail/blobs/${body.id}` }),
+    );
+    if (!blob.Body) throw new Error("missing blob body");
+    expect(new Uint8Array(await blob.Body.transformToByteArray())).toEqual(bytes);
     const meta = await probe.send(new GetObjectCommand({ Bucket: BUCKET, Key: "trail/meta.json" }));
-    expect((await meta.Body!.transformToString("utf8")).includes("s3-check.txt")).toBe(true);
+    if (!meta.Body) throw new Error("missing meta body");
+    expect((await meta.Body.transformToString("utf8")).includes("s3-check.txt")).toBe(true);
   });
 
   it("downloads via a presigned 302 redirect with byte-identical content", async () => {
@@ -84,17 +84,19 @@ describe("S3 driver (s3rver)", () => {
     const payload = "download me over s3";
     fd.append("file", new File([payload], "dl.txt", { type: "text/plain" }));
     const uploaded = await upload(
-      asContext({ request: new Request("http://localhost/api/upload", { method: "POST", body: fd }) }),
+      asContext({
+        request: new Request("http://localhost/api/upload", { method: "POST", body: fd }),
+      }),
     );
     const { id } = (await uploaded.json()) as { id: string };
 
     const redirect = await getFile(asContext({ params: { id } }));
     expect(redirect.status).toBe(302);
     const location = redirect.headers.get("location");
-    expect(location).not.toBeNull();
-    expect(location!).toContain(encodeURIComponent("dl.txt"));
+    if (location === null) throw new Error("expected Location header");
+    expect(location).toContain(encodeURIComponent("dl.txt"));
 
-    const fetched = await fetch(location!);
+    const fetched = await fetch(location);
     expect(fetched.status).toBe(200);
     expect(fetched.headers.get("content-disposition")).toContain("dl.txt");
     expect(await fetched.text()).toBe(payload);
@@ -111,7 +113,9 @@ describe("S3 driver (s3rver)", () => {
     const fd = new FormData();
     fd.append("file", new File([new Uint8Array([1, 2, 3])], "gone.bin"));
     const uploaded = await upload(
-      asContext({ request: new Request("http://localhost/api/upload", { method: "POST", body: fd }) }),
+      asContext({
+        request: new Request("http://localhost/api/upload", { method: "POST", body: fd }),
+      }),
     );
     const { id } = (await uploaded.json()) as { id: string };
 

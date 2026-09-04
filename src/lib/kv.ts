@@ -27,18 +27,16 @@ export const LocalKVLive = Layer.effect(
     const fileFor = (key: string) => path.join(dir, key);
 
     const read = (key: string) =>
-      fs
-        .exists(fileFor(key))
-        .pipe(
-          Effect.mapError((cause) => new MetaError({ op: "read", cause })),
-          Effect.andThen((exists) =>
-            exists
-              ? fs
-                  .readFileString(fileFor(key))
-                  .pipe(Effect.mapError((cause) => new MetaError({ op: "read", cause })))
-              : Effect.succeed(undefined),
-          ),
-        );
+      fs.exists(fileFor(key)).pipe(
+        Effect.mapError((cause) => new MetaError({ op: "read", cause })),
+        Effect.andThen((exists) =>
+          exists
+            ? fs
+                .readFileString(fileFor(key))
+                .pipe(Effect.mapError((cause) => new MetaError({ op: "read", cause })))
+            : Effect.succeed(undefined),
+        ),
+      );
 
     const write = (key: string, content: string) =>
       fs

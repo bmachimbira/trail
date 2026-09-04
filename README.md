@@ -9,7 +9,9 @@ link expires automatically. Built with **Astro** (SSR pages + API routes) and
 - Drag-and-drop or click-to-pick uploads with progress
 - Shareable download pages (`/f/<id>`) with file details
 - Auto-expiring transfers (default 24 h) — expired links return `410 Gone`
+- Expired transfers are reaped (blob + metadata) at boot and on an interval
 - Download counter, delete, recent-uploads list
+- Optional bearer-token auth (`AUTH_TOKEN`) on upload/list/delete — share links stay public
 - Metadata persisted to disk (`meta.json`), blobs stored on the filesystem
 - CSRF origin checking (Astro `checkOrigin`) with configurable allowed hosts
 
@@ -34,6 +36,7 @@ npm start          # serves the built app (HOST/PORT env respected)
 | `UPLOAD_DIR`              | `./uploads` | Local driver: where blobs and `meta.json` are stored    |
 | `MAX_UPLOAD_MB`           | `100`       | Upload size limit                                       |
 | `TTL_HOURS`               | `24`        | Hours until a transfer expires                          |
+| `SWEEP_INTERVAL_MINUTES`  | `60`        | How often expired transfers are reaped (blob + metadata) |
 | `STORAGE_DRIVER`          | `local`     | `local` (filesystem) or `s3`                            |
 | `S3_BUCKET`               | `trail`     | S3 driver: bucket name                                  |
 | `S3_REGION`               | `us-east-1` | S3 driver: signing region                               |
@@ -42,6 +45,7 @@ npm start          # serves the built app (HOST/PORT env respected)
 | `S3_PREFIX`               | `trail`     | S3 driver: key prefix (`<prefix>/blobs/<id>`, `meta.json`) |
 | `DOWNLOAD_URL_TTL_MINUTES`| `60`        | S3 driver: presigned download URL lifetime (capped by transfer TTL) |
 | `ALLOWED_HOSTS`           | —           | Extra trusted hostnames (comma-separated) for Astro's origin check |
+| `AUTH_TOKEN`              | —           | When set, upload/list/delete require `Authorization: Bearer <token>` |
 
 AWS credentials come from the default SDK chain (`AWS_ACCESS_KEY_ID` etc.,
 instance profiles, …) — never put secrets in the repo.
@@ -54,8 +58,9 @@ from S3 straight to recipients — the app server never touches them. The
 download counter is still incremented server-side at redirect time.
 
 Works with anything S3-compatible: AWS S3, MinIO (`S3_ENDPOINT=http://…`,
-`S3_PATH_STYLE=true`), Cloudflare R2. Expired transfers are gated at read
-time; to reclaim the storage, add a bucket lifecycle rule matching your TTL:
+`S3_PATH_STYLE=true`), Cloudflare R2. The sweeper deletes expired blobs from
+the bucket directly; a bucket lifecycle rule is a useful backstop in case the
+app is down for longer than a TTL:
 
 ```sh
 aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-configuration '{
@@ -78,6 +83,13 @@ Uploads still pass through the app server (multipart form, bounded by
 
 Mutating requests must pass Astro's origin check: browsers send this
 automatically; for `curl` add `-H "Origin: http://<host>:<port>"`.
+
+When `AUTH_TOKEN` is set, `POST /api/upload`, `GET /api/files`, and
+`DELETE /api/files/<id>` additionally require `-H "Authorization: Bearer
+<token>"` (compare-safe, constant time). Downloads and `/f/<id>` share pages
+stay public — the token only guards management. With no `AUTH_TOKEN` the
+instance runs open; only do that on a trusted network. The web UI asks for
+the token once and keeps it in `localStorage`.
 
 Example:
 

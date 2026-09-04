@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect";
-import { KeyValueStore } from "./kv.js";
 import { MetaError, NotFoundError } from "./errors.js";
+import { KeyValueStore } from "./kv.js";
 
 export interface TransferRecord {
   readonly id: string;
@@ -44,17 +44,18 @@ export const TransferMetaLive = Layer.effect(
 
     const readAll: Effect.Effect<void, MetaError> = Effect.suspend(() => {
       if (loaded) return Effect.void;
-      return kv.read(metaKey).pipe(
-        Effect.andThen((raw) => {
-          if (raw === undefined) {
-            loaded = true;
-            return;
-          }
-          const records = JSON.parse(raw) as TransferRecord[];
+      return Effect.gen(function* () {
+        const raw = yield* kv.read(metaKey);
+        if (raw !== undefined) {
+          // A corrupt meta.json (e.g. crash mid-write) is a read error, not a defect.
+          const records = yield* Effect.try({
+            try: () => JSON.parse(raw) as TransferRecord[],
+            catch: (cause) => new MetaError({ op: "read", cause }),
+          });
           for (const record of records) cache.set(record.id, record);
-          loaded = true;
-        }),
-      );
+        }
+        loaded = true;
+      });
     });
 
     // suspend: re-reads the cache at run time, not at layer build time.
@@ -71,7 +72,10 @@ export const TransferMetaLive = Layer.effect(
       );
 
     const find = (id: string) =>
-      readAll.pipe(Effect.andThen(() => cache.get(id)), semaphore.withPermits(1));
+      readAll.pipe(
+        Effect.andThen(() => cache.get(id)),
+        semaphore.withPermits(1),
+      );
 
     const upsert = (record: TransferRecord) =>
       readAll.pipe(

@@ -1,17 +1,16 @@
-import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { AppConfig } from "../src/lib/config.js";
-import { LocalKVLive, KeyValueStore } from "../src/lib/kv.js";
-import { FileStorage, FileStorageLive } from "../src/lib/storage.js";
-import { TransferMeta, TransferMetaLive } from "../src/lib/meta.js";
-import { FileTransfer, FileTransferLive } from "../src/lib/transfer.js";
-import type { FileTransferService } from "../src/lib/transfer.js";
+import { type KeyValueStore, LocalKVLive } from "../src/lib/kv.js";
 import type { TransferRecord } from "../src/lib/meta.js";
-import type { DownloadResult } from "../src/lib/transfer.js";
+import { type TransferMeta, TransferMetaLive } from "../src/lib/meta.js";
+import { type FileStorage, FileStorageLive } from "../src/lib/storage.js";
+import type { DownloadResult, FileTransferService } from "../src/lib/transfer.js";
+import { FileTransfer, FileTransferLive } from "../src/lib/transfer.js";
 
 const bytesOf = (d: DownloadResult) => {
   if (d.kind !== "bytes") throw new Error(`expected bytes download, got ${d.kind}`);
@@ -31,6 +30,7 @@ const makeLive = (cfg: TestCfg = {}, dir = mkdtempSync(join(tmpdir(), "trail-tes
     maxUploadBytes: cfg.maxUploadBytes ?? 1024,
     ttlMs: cfg.ttlMs ?? 60_000,
     storageDriver: "local" as const,
+    sweepIntervalMs: 60_000,
     s3: {
       bucket: "unused",
       region: "us-east-1",
@@ -56,7 +56,10 @@ const makeLive = (cfg: TestCfg = {}, dir = mkdtempSync(join(tmpdir(), "trail-tes
   return { Live, dir };
 };
 
-const runTest = <A, E>(cfg: TestCfg, eff: (transfer: FileTransferService) => Effect.Effect<A, E, AllTags>) => {
+const runTest = <A, E>(
+  cfg: TestCfg,
+  eff: (transfer: FileTransferService) => Effect.Effect<A, E, AllTags>,
+) => {
   const { Live, dir } = makeLive(cfg);
   return Effect.runPromise(
     Effect.gen(function* () {
@@ -65,16 +68,6 @@ const runTest = <A, E>(cfg: TestCfg, eff: (transfer: FileTransferService) => Eff
     }).pipe(Effect.provide(Live), Effect.scoped),
   ).finally(() => rmSync(dir, { recursive: true, force: true }));
 };
-
-let sharedDir: string;
-
-beforeEach(() => {
-  sharedDir = mkdtempSync(join(tmpdir(), "trail-test-"));
-});
-
-afterEach(() => {
-  rmSync(sharedDir, { recursive: true, force: true });
-});
 
 const uploadBytes = (transfer: FileTransferService, bytes: number[], filename = "notes.txt") =>
   transfer.upload({
@@ -124,7 +117,7 @@ describe("FileTransfer", () => {
       }).pipe(Effect.provide(Live), Effect.scoped),
     );
     // A brand-new layer stack (simulating a server restart) sees the record.
-    const { Live: Live2, dir: _dir } = makeLive({}, dir);
+    const { Live: Live2 } = makeLive({}, dir);
     const found = await Effect.runPromise(
       Effect.gen(function* () {
         const transfer = yield* FileTransfer;
@@ -145,7 +138,7 @@ describe("FileTransfer", () => {
     }
   });
 
-  it("marks expired transfers as ExpiredError but keeps them listed", async () => {
+  it("marks expired transfers as ExpiredError and hides them from list", async () => {
     const result = await runTest({ ttlMs: -60_000 }, (transfer) =>
       Effect.gen(function* () {
         const record = yield* uploadBytes(transfer, [1]);
@@ -154,11 +147,43 @@ describe("FileTransfer", () => {
         return { record, listed, gotten };
       }),
     );
-    expect(result.listed).toHaveLength(1);
+    expect(result.listed).toHaveLength(0);
     expect(result.gotten._tag).toBe("Left");
     if (result.gotten._tag === "Left") {
       expect(result.gotten.left).toMatchObject({ _tag: "ExpiredError", id: result.record.id });
     }
+  });
+
+  it("sweepExpired reaps expired records and their blobs", async () => {
+    const { Live, dir } = makeLive({ ttlMs: -60_000 });
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const transfer = yield* FileTransfer;
+        const record = yield* uploadBytes(transfer, [1, 2, 3], "old.bin");
+        const reaped = yield* transfer.sweepExpired();
+        const listed = yield* transfer.list();
+        const found = yield* transfer.find(record.id);
+        return { record, reaped, listed, found };
+      }).pipe(Effect.provide(Live), Effect.scoped),
+    );
+    expect(result.reaped).toBe(1);
+    expect(result.listed).toHaveLength(0);
+    expect(result.found).toBeUndefined();
+    expect(existsSync(join(dir, result.record.id))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("sweepExpired keeps live transfers", async () => {
+    const result = await runTest({}, (transfer) =>
+      Effect.gen(function* () {
+        yield* uploadBytes(transfer, [1]);
+        const reaped = yield* transfer.sweepExpired();
+        const listed = yield* transfer.list();
+        return { reaped, listed };
+      }),
+    );
+    expect(result.reaped).toBe(0);
+    expect(result.listed).toHaveLength(1);
   });
 
   it("deletes the blob and metadata, then 404s", async () => {
@@ -180,7 +205,7 @@ describe("FileTransfer", () => {
 
   it("sanitizes hostile filenames", async () => {
     const result = await runTest({}, (transfer) =>
-      uploadBytes(transfer, [1], "../../etc/passwd\u0000 evil\"name.txt"),
+      uploadBytes(transfer, [1], '../../etc/passwd\u0000 evil"name.txt'),
     );
     expect(result.filename).toBe("....etcpasswd evilname.txt");
   });

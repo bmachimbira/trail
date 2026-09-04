@@ -29,10 +29,7 @@ export const errorToResponse = (error: TransferError): Response => {
     case "ExpiredError":
       return json({ error: "expired", id: error.id }, 410);
     case "UploadTooLargeError":
-      return json(
-        { error: "payload_too_large", size: error.size, maxBytes: error.maxBytes },
-        413,
-      );
+      return json({ error: "payload_too_large", size: error.size, maxBytes: error.maxBytes }, 413);
     case "StorageError":
     case "MetaError":
       return json({ error: "internal_error", op: error.op }, 500);

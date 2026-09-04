@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -9,10 +10,9 @@ import { Context, Effect, Layer } from "effect";
 import { AppConfig, type AppConfigService } from "./config.js";
 import { MetaError, NotFoundError, StorageError } from "./errors.js";
 import { contentDisposition } from "./http.js";
+import { KeyValueStore, type KeyValueStoreService } from "./kv.js";
 import type { TransferRecord } from "./meta.js";
 import { FileStorage, type FileStorageService } from "./storage.js";
-import { KeyValueStore, type KeyValueStoreService } from "./kv.js";
-import { Readable } from "node:stream";
 
 /** One shared S3Client per process, built from AppConfig. */
 export class S3ClientTag extends Context.Tag("trail/S3Client")<S3ClientTag, S3Client>() {}
@@ -82,9 +82,7 @@ export const FileStorageS3Live = Layer.effect(
         const out = yield* Effect.tryPromise({
           try: () => client.send(new GetObjectCommand({ Bucket: ks.bucket, Key: ks.blobKey(id) })),
           catch: (cause: unknown) =>
-            is404(cause)
-              ? new NotFoundError({ id })
-              : new StorageError({ op: "read", cause }),
+            is404(cause) ? new NotFoundError({ id }) : new StorageError({ op: "read", cause }),
         });
         if (out.Body === undefined) return yield* new NotFoundError({ id });
         const chunks = yield* Effect.tryPromise({
@@ -145,9 +143,10 @@ export const S3KVLive = Layer.effect(
           try: () => client.send(new GetObjectCommand({ Bucket: ks.bucket, Key: ks.kvKey(key) })),
           catch: (cause) => new MetaError({ op: "read", cause }),
         });
-        if (out.Body === undefined) return yield* new MetaError({ op: "read", cause: "empty body" });
+        const body = out.Body;
+        if (body === undefined) return yield* new MetaError({ op: "read", cause: "empty body" });
         return yield* Effect.tryPromise({
-          try: () => out.Body!.transformToString("utf8"),
+          try: () => body.transformToString("utf8"),
           catch: (cause) => new MetaError({ op: "read", cause }),
         });
       }).pipe(

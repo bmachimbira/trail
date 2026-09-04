@@ -17,6 +17,8 @@ export interface AppConfigService {
   readonly maxUploadBytes: number;
   /** How long a transfer stays downloadable, in milliseconds. */
   readonly ttlMs: number;
+  /** How often expired transfers are reaped, in milliseconds. */
+  readonly sweepIntervalMs: number;
   /** Blob storage backend: local filesystem or S3-compatible. */
   readonly storageDriver: "local" | "s3";
   readonly s3: S3Settings;
@@ -42,6 +44,10 @@ export const AppConfigLive = Layer.effect(
       ttlMs: yield* Config.integer("TTL_HOURS").pipe(
         Config.withDefault(24),
         Config.map((hours) => hours * 60 * 60 * 1000),
+      ),
+      sweepIntervalMs: yield* Config.integer("SWEEP_INTERVAL_MINUTES").pipe(
+        Config.withDefault(60),
+        Config.map((m) => m * 60 * 1000),
       ),
       storageDriver: driver,
       s3: {
