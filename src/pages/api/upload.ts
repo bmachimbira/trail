@@ -41,7 +41,13 @@ export const POST: APIRoute = async ({ request }) => {
     );
   });
 
-  const outcome = await runApp(effect);
+  // A truncated body leaves @effect/platform's multipart channel re-pumping an
+  // ended mailbox forever (100% CPU, orphaned .tmp). Astro aborts the signal
+  // when the socket closes, which interrupts the fiber and runs put()'s cleanup.
+  const outcome = await runApp(effect, { signal: request.signal }).catch((cause: unknown) => {
+    if (request.signal.aborted) return new StorageError({ op: "read", cause });
+    throw cause;
+  });
   if (isTransferError(outcome) && outcome._tag === "StorageError" && outcome.op === "read") {
     return json({ error: "invalid_form" }, 400);
   }

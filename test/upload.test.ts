@@ -83,6 +83,39 @@ describe("streaming upload route", () => {
     });
     expect(readdirSync(uploadDir).sort()).toEqual([uploadedId, "meta.json"].sort());
   });
+
+  it("stops and removes the temp file when the client aborts mid-upload", async () => {
+    const controller = new AbortController();
+    const encoder = new TextEncoder();
+    // Header plus one chunk, then the body stalls until the abort.
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(
+          encoder.encode(
+            `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="stall.bin"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+          ),
+        );
+        c.enqueue(new Uint8Array(64 * 1024));
+      },
+    });
+    const request = new Request("http://localhost/api/upload", {
+      method: "POST",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      body,
+      duplex: "half",
+      signal: controller.signal,
+    } as RequestInit & { duplex: "half" });
+
+    const pending = upload(asContext({ request }));
+    await new Promise((r) => setTimeout(r, 100));
+    controller.abort();
+    const response = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("upload never settled after abort")), 5000)),
+    ]);
+    expect(response.status).toBe(400);
+    expect(readdirSync(uploadDir).sort()).toEqual([uploadedId, "meta.json"].sort());
+  });
 });
 
 afterAll(() => {

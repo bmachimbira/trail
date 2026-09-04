@@ -51,9 +51,11 @@ export const AppRuntime: AppRuntime = store.__trailRuntime;
  */
 export const runApp = <A, E>(
   effect: Effect.Effect<A, E, AppServices>,
+  options?: { readonly signal?: AbortSignal },
 ): Promise<A | TransferError> =>
   AppRuntime.runPromise(
     Effect.catchAll(effect as Effect.Effect<A, TransferError, AppServices>, (e) =>
       Effect.succeed(e),
     ),
+    options,
   );
