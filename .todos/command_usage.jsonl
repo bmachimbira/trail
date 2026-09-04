@@ -73,3 +73,28 @@
 {"ts":"2026-09-04T20:15:32.290541+02:00","cmd":"review","session":"ses_8c319e","ok":true,"dur_ms":125}
 {"ts":"2026-09-04T20:15:32.490356+02:00","cmd":"approve","flags":{"reason":"Unit tests (16 total) green; live end-to-end smoke verified 401/200/204 matrix and public downloads; lint+typecheck green","self-review":"true"},"session":"ses_8c319e","ok":true,"dur_ms":111}
 {"ts":"2026-09-04T20:16:14.344359+02:00","cmd":"start","session":"ses_8c319e","ok":true,"dur_ms":150}
+{"ts":"2026-09-04T20:22:40.322743+02:00","cmd":"log","session":"ses_8c319e","ok":true,"dur_ms":90}
+{"ts":"2026-09-04T20:38:19.156925+02:00","cmd":"usage","flags":{"new-session":"true","quiet":"true"},"session":"ses_67c6d1","ok":true,"dur_ms":58}
+{"ts":"2026-09-04T20:38:19.288741+02:00","cmd":"status","session":"ses_67c6d1","ok":true,"dur_ms":63}
+{"ts":"2026-09-04T20:38:24.598563+02:00","cmd":"list","flags":{"all":"true"},"session":"ses_67c6d1","ok":true,"dur_ms":1}
+{"ts":"2026-09-04T20:38:24.612292+02:00","cmd":"show","session":"ses_67c6d1","ok":true,"dur_ms":1}
+{"ts":"2026-09-04T20:38:30.114694+02:00","cmd":"log","ok":true,"dur_ms":0}
+{"ts":"2026-09-04T20:38:30.133722+02:00","cmd":"handoff","ok":true,"dur_ms":0}
+{"ts":"2026-09-04T20:38:30.151322+02:00","cmd":"review","ok":true,"dur_ms":0}
+{"ts":"2026-09-04T20:38:30.112708+02:00","cmd":"show","session":"ses_67c6d1","ok":true,"dur_ms":66}
+{"ts":"2026-09-04T20:38:39.32061+02:00","cmd":"start","session":"ses_67c6d1","ok":false,"dur_ms":100,"err":"no issues started: td: silent exit"}
+{"ts":"2026-09-04T20:38:44.544953+02:00","cmd":"start","ok":true,"dur_ms":0}
+{"ts":"2026-09-04T20:38:44.568935+02:00","cmd":"status","ok":false,"dur_ms":0,"err":"unknown flag: --all"}
+{"ts":"2026-09-04T20:55:16.752313+02:00","cmd":"log","flags":{"issue":"td-a40749","type":"progress"},"session":"ses_67c6d1","ok":true,"dur_ms":61}
+{"ts":"2026-09-04T20:55:16.878603+02:00","cmd":"log","flags":{"issue":"td-7c6aad","type":"progress"},"session":"ses_67c6d1","ok":true,"dur_ms":62}
+{"ts":"2026-09-04T20:55:45.549068+02:00","cmd":"handoff","flags":{"decision":"[\"S3 metadata uses atomic PutObject replacement semantics, documented in README\"]","done":"[Local meta.json writes use temporary file + rename and clean temp files on failed writes,Failed metadata upserts compensate by removing the blob; metadata cache rolls back on persistence failure,Regression test verifies failed upsert leaves no files]","note":"Verified with full suite: 22 tests, typecheck, lint, and build all pass."},"session":"ses_67c6d1","ok":true,"dur_ms":185}
+{"ts":"2026-09-04T20:55:50.756229+02:00","cmd":"handoff","flags":{"done":"[Multipart request bodies stream into storage without request.formData or file.arrayBuffer buffering,Local uploads use bounded streaming temp-file writes and local downloads return file streams,S3 uploads use streamed PutObject bodies and downloads return S3 body streams,Chunk-level upload limits return 413 and clean partial uploads; README and tests updated]","note":"Verified with full suite: 22 tests, typecheck, lint, build, and built-server upload/download/oversize smoke test."},"session":"ses_67c6d1","ok":true,"dur_ms":96}
+{"ts":"2026-09-04T20:55:54.744413+02:00","cmd":"review","flags":{"reason":"Implementation and regression coverage complete; atomic metadata, compensation, and full verification done."},"session":"ses_67c6d1","ok":true,"dur_ms":65}
+{"ts":"2026-09-04T20:55:58.215926+02:00","cmd":"review","flags":{"reason":"Streaming implementation and endpoint behavior complete; full verification plus built-server smoke test passed."},"session":"ses_67c6d1","ok":true,"dur_ms":65}
+{"ts":"2026-09-04T20:56:02.748965+02:00","cmd":"approve","flags":{"reason":"Self-reviewed implementation and tests: atomic local metadata writes, cache rollback, failed-upsert blob compensation, and 22-test/typecheck/lint/build verification.","self-review":"true"},"session":"ses_67c6d1","ok":true,"dur_ms":73}
+{"ts":"2026-09-04T20:56:06.063634+02:00","cmd":"approve","flags":{"reason":"Self-reviewed implementation and tests: streaming multipart/local/S3 paths, chunk-level 413 enforcement, cleanup, and 22-test/typecheck/lint/build verification.","self-review":"true"},"session":"ses_67c6d1","ok":true,"dur_ms":97}
+{"ts":"2026-09-04T20:56:15.867637+02:00","cmd":"status","session":"ses_67c6d1","ok":true,"dur_ms":63}
+{"ts":"2026-09-04T20:56:16.008131+02:00","cmd":"show","session":"ses_67c6d1","ok":true,"dur_ms":76}
+{"ts":"2026-09-04T20:56:16.153315+02:00","cmd":"show","session":"ses_67c6d1","ok":true,"dur_ms":1}
+{"ts":"2026-09-04T20:57:00.604614+02:00","cmd":"status","session":"ses_67c6d1","ok":true,"dur_ms":69}
+{"ts":"2026-09-04T20:57:00.749564+02:00","cmd":"usage","flags":{"quiet":"true"},"session":"ses_67c6d1","ok":true,"dur_ms":65}

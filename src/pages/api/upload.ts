@@ -1,47 +1,52 @@
+import { HttpServerRequest, Multipart } from "@effect/platform";
 import type { APIRoute } from "astro";
-import { Effect } from "effect";
-import { AppConfig } from "../../lib/config.js";
-import { StorageError, UploadTooLargeError } from "../../lib/errors.js";
+import { Effect, Stream } from "effect";
+import { StorageError } from "../../lib/errors.js";
 import { errorToResponse, isTransferError, json } from "../../lib/http.js";
+import type { TransferRecord } from "../../lib/meta.js";
 import { runApp } from "../../lib/runtime.js";
 import { FileTransfer } from "../../lib/transfer.js";
 
 export const POST: APIRoute = async ({ request }) => {
-  let form: FormData;
-  try {
-    form = await request.formData();
-  } catch {
+  if (
+    !(request.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data")
+  ) {
     return json({ error: "invalid_form" }, 400);
   }
 
-  const file = form.get("file");
-  if (!(file instanceof File)) {
-    return json({ error: "missing_file" }, 400);
-  }
-
   const effect = Effect.gen(function* () {
-    const config = yield* AppConfig;
-    // Check the parsed size before buffering the bytes into memory.
-    if (file.size > config.maxUploadBytes) {
-      return yield* new UploadTooLargeError({
-        size: file.size,
-        maxBytes: config.maxUploadBytes,
-      });
-    }
-    const content = yield* Effect.tryPromise({
-      try: async () => new Uint8Array(await file.arrayBuffer()),
-      catch: (cause) => new StorageError({ op: "read", cause }),
-    });
     const transfer = yield* FileTransfer;
-    return yield* transfer.upload({
-      filename: file.name,
-      contentType: file.type,
-      content,
-    });
+    const incoming = HttpServerRequest.fromWeb(request);
+    const parts = incoming.multipartStream.pipe(
+      Multipart.withLimitsStream({ maxFieldSize: 64 * 1024 }),
+      Stream.mapError((cause) => new StorageError({ op: "read", cause })),
+    );
+
+    return yield* parts.pipe(
+      Stream.runFoldEffect(undefined as TransferRecord | undefined, (uploaded, part) => {
+        if (Multipart.isField(part)) return Effect.succeed(uploaded);
+        if (uploaded !== undefined || part.key !== "file") {
+          return part.content.pipe(
+            Stream.runDrain,
+            Effect.mapError((cause) => new StorageError({ op: "read", cause })),
+            Effect.as(uploaded),
+          );
+        }
+        return transfer.upload({
+          filename: part.name,
+          contentType: part.contentType,
+          content: part.content,
+        });
+      }),
+    );
   });
 
   const outcome = await runApp(effect);
+  if (isTransferError(outcome) && outcome._tag === "StorageError" && outcome.op === "read") {
+    return json({ error: "invalid_form" }, 400);
+  }
   if (isTransferError(outcome)) return errorToResponse(outcome);
+  if (outcome === undefined) return json({ error: "missing_file" }, 400);
 
   return json({ ...outcome, downloadUrl: `/api/files/${outcome.id}` }, 201);
 };

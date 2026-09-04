@@ -80,8 +80,16 @@ export const TransferMetaLive = Layer.effect(
     const upsert = (record: TransferRecord) =>
       readAll.pipe(
         Effect.andThen(() => {
+          const previous = cache.get(record.id);
           cache.set(record.id, record);
-          return persistAll;
+          return persistAll.pipe(
+            Effect.onError(() =>
+              Effect.sync(() => {
+                if (previous === undefined) cache.delete(record.id);
+                else cache.set(record.id, previous);
+              }),
+            ),
+          );
         }),
         Effect.asVoid,
         semaphore.withPermits(1),

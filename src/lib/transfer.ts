@@ -1,4 +1,4 @@
-import { Context, Duration, Effect, Layer, Schedule } from "effect";
+import { Context, Duration, Effect, Layer, Schedule, type Stream } from "effect";
 import { AppConfig } from "./config.js";
 import {
   ExpiredError,
@@ -6,7 +6,6 @@ import {
   NotFoundError,
   type StorageError,
   type TransferError,
-  UploadTooLargeError,
 } from "./errors.js";
 import { TransferMeta, type TransferRecord } from "./meta.js";
 import { FileStorage } from "./storage.js";
@@ -14,12 +13,16 @@ import { FileStorage } from "./storage.js";
 export interface UploadInput {
   readonly filename: string;
   readonly contentType: string;
-  readonly content: Uint8Array;
+  readonly content: Stream.Stream<Uint8Array, unknown>;
 }
 
 export type DownloadResult =
   | { readonly kind: "redirect"; readonly record: TransferRecord; readonly url: string }
-  | { readonly kind: "bytes"; readonly record: TransferRecord; readonly content: Uint8Array };
+  | {
+      readonly kind: "stream";
+      readonly record: TransferRecord;
+      readonly content: Stream.Stream<Uint8Array, StorageError>;
+    };
 
 export interface FileTransferService {
   readonly upload: (input: UploadInput) => Effect.Effect<TransferRecord, TransferError>;
@@ -57,25 +60,25 @@ export const FileTransferLive = Layer.effect(
 
     const upload = (input: UploadInput) =>
       Effect.gen(function* () {
-        if (input.content.byteLength > config.maxUploadBytes) {
-          return yield* new UploadTooLargeError({
-            size: input.content.byteLength,
-            maxBytes: config.maxUploadBytes,
-          });
-        }
         const id = randomId();
         const now = new Date();
+        const contentType = input.contentType || "application/octet-stream";
+        const size = yield* storage
+          .put(id, input.content, contentType)
+          .pipe(Effect.onError(() => storage.remove(id).pipe(Effect.ignoreLogged)));
         const record: TransferRecord = {
           id,
           filename: sanitizeFilename(input.filename),
-          contentType: input.contentType || "application/octet-stream",
-          size: input.content.byteLength,
+          contentType,
+          size,
           uploadedAt: now.toISOString(),
           expiresAt: new Date(now.getTime() + config.ttlMs).toISOString(),
           downloads: 0,
         };
-        yield* storage.put(id, input.content, input.contentType || "application/octet-stream");
-        yield* meta.upsert(record);
+        yield* meta.upsert(record).pipe(
+          // Never leave an unreferenced blob when metadata persistence fails.
+          Effect.onError(() => storage.remove(id).pipe(Effect.ignoreLogged)),
+        );
         return record;
       });
 
@@ -104,7 +107,7 @@ export const FileTransferLive = Layer.effect(
 
         const content = yield* storage.get(id);
         const counted = yield* meta.update(id, (r) => ({ ...r, downloads: r.downloads + 1 }));
-        return { kind: "bytes" as const, record: counted, content };
+        return { kind: "stream" as const, record: counted, content };
       });
 
     const remove = (id: string) =>

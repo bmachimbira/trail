@@ -1,5 +1,5 @@
 import type { APIRoute } from "astro";
-import { Effect } from "effect";
+import { Effect, Stream } from "effect";
 import { contentDisposition, errorToResponse, isTransferError } from "../../../lib/http.js";
 import { runApp } from "../../../lib/runtime.js";
 import { FileTransfer } from "../../../lib/transfer.js";
@@ -23,13 +23,11 @@ export const GET: APIRoute = async ({ params }) => {
   }
 
   const { record, content } = outcome;
-  // fs.readFile yields a non-shared ArrayBuffer; this cast is view-only.
-  const body = content as unknown as Uint8Array<ArrayBuffer>;
-  return new Response(body, {
+  return new Response(Stream.toReadableStream(content), {
     status: 200,
     headers: {
       "Content-Type": record.contentType || "application/octet-stream",
-      "Content-Length": String(content.byteLength),
+      "Content-Length": String(record.size),
       "Content-Disposition": contentDisposition(record),
       "Cache-Control": "private, no-store",
     },

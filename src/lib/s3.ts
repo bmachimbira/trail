@@ -1,4 +1,4 @@
-import type { Readable } from "node:stream";
+import { Readable as NodeReadable } from "node:stream";
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -6,13 +6,13 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Stream } from "effect";
 import { AppConfig, type AppConfigService } from "./config.js";
-import { MetaError, NotFoundError, StorageError } from "./errors.js";
+import { MetaError, NotFoundError, StorageError, UploadTooLargeError } from "./errors.js";
 import { contentDisposition } from "./http.js";
 import { KeyValueStore, type KeyValueStoreService } from "./kv.js";
 import type { TransferRecord } from "./meta.js";
-import { FileStorage, type FileStorageService } from "./storage.js";
+import { type ByteStream, FileStorage, type FileStorageService, limitStream } from "./storage.js";
 
 /** One shared S3Client per process, built from AppConfig. */
 export class S3ClientTag extends Context.Tag("trail/S3Client")<S3ClientTag, S3Client>() {}
@@ -28,6 +28,9 @@ export const S3ClientLive = Layer.effect(
       region: config.s3.region,
       endpoint: config.s3.endpoint,
       forcePathStyle: config.s3.pathStyle,
+      // A streamed body has no length available up front. Avoid the default
+      // aws-chunked checksum mode, which requires x-amz-decoded-content-length.
+      requestChecksumCalculation: "WHEN_REQUIRED",
     });
   }),
 );
@@ -63,19 +66,31 @@ export const FileStorageS3Live = Layer.effect(
     const config = yield* AppConfig;
     const ks = keySpace(config);
 
-    const put = (id: string, content: Uint8Array, contentType?: string) =>
-      Effect.tryPromise({
+    const put = (id: string, content: ByteStream, contentType?: string) => {
+      let size = 0;
+      const bounded = limitStream(content, config.maxUploadBytes).pipe(
+        Stream.tap((chunk) =>
+          Effect.sync(() => {
+            size += chunk.byteLength;
+          }),
+        ),
+      );
+      const body = NodeReadable.from(Stream.toAsyncIterable(bounded));
+
+      return Effect.tryPromise({
         try: () =>
           client.send(
             new PutObjectCommand({
               Bucket: ks.bucket,
               Key: ks.blobKey(id),
-              Body: content,
+              Body: body,
               ContentType: contentType ?? "application/octet-stream",
             }),
           ),
-        catch: toStorageError("write"),
-      }).pipe(Effect.asVoid);
+        catch: (cause) =>
+          cause instanceof UploadTooLargeError ? cause : new StorageError({ op: "write", cause }),
+      }).pipe(Effect.map(() => size));
+    };
 
     const get = (id: string) =>
       Effect.gen(function* () {
@@ -85,18 +100,10 @@ export const FileStorageS3Live = Layer.effect(
             is404(cause) ? new NotFoundError({ id }) : new StorageError({ op: "read", cause }),
         });
         if (out.Body === undefined) return yield* new NotFoundError({ id });
-        const chunks = yield* Effect.tryPromise({
-          try: () => (out.Body as Readable).toArray(),
-          catch: (cause) => new StorageError({ op: "read", cause }),
-        });
-        const total = chunks.reduce((n, c) => n + c.byteLength, 0);
-        const content = new Uint8Array(total);
-        let offset = 0;
-        for (const chunk of chunks) {
-          content.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        return content;
+        return Stream.fromAsyncIterable(
+          out.Body as unknown as AsyncIterable<Uint8Array>,
+          (cause) => new StorageError({ op: "read", cause }),
+        );
       });
 
     const remove = (id: string) =>

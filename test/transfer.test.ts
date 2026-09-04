@@ -1,21 +1,17 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeContext } from "@effect/platform-node";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import { AppConfig } from "../src/lib/config.js";
+import { MetaError } from "../src/lib/errors.js";
 import { type KeyValueStore, LocalKVLive } from "../src/lib/kv.js";
 import type { TransferRecord } from "../src/lib/meta.js";
-import { type TransferMeta, TransferMetaLive } from "../src/lib/meta.js";
+import { TransferMeta, TransferMetaLive, type TransferMetaService } from "../src/lib/meta.js";
 import { type FileStorage, FileStorageLive } from "../src/lib/storage.js";
-import type { DownloadResult, FileTransferService } from "../src/lib/transfer.js";
+import type { FileTransferService } from "../src/lib/transfer.js";
 import { FileTransfer, FileTransferLive } from "../src/lib/transfer.js";
-
-const bytesOf = (d: DownloadResult) => {
-  if (d.kind !== "bytes") throw new Error(`expected bytes download, got ${d.kind}`);
-  return d;
-};
 
 interface TestCfg {
   readonly maxUploadBytes?: number;
@@ -73,7 +69,7 @@ const uploadBytes = (transfer: FileTransferService, bytes: number[], filename = 
   transfer.upload({
     filename,
     contentType: "text/plain",
-    content: new Uint8Array(bytes),
+    content: Stream.fromIterable([new Uint8Array(bytes)]),
   });
 
 describe("FileTransfer", () => {
@@ -83,7 +79,15 @@ describe("FileTransfer", () => {
         const record = yield* uploadBytes(transfer, [104, 105]);
         const listed = yield* transfer.list();
         const fetched = yield* transfer.download(record.id);
-        return { record, listed, fetched: bytesOf(fetched) };
+        if (fetched.kind !== "stream")
+          throw new Error(`expected stream download, got ${fetched.kind}`);
+        const content = yield* Stream.runFold(fetched.content, new Uint8Array(), (all, chunk) => {
+          const next = new Uint8Array(all.byteLength + chunk.byteLength);
+          next.set(all);
+          next.set(chunk, all.byteLength);
+          return next;
+        });
+        return { record, listed, fetched: { ...fetched, content } };
       }),
     );
     expect(result.record.filename).toBe("notes.txt");
@@ -135,6 +139,80 @@ describe("FileTransfer", () => {
     expect(result._tag).toBe("Left");
     if (result._tag === "Left") {
       expect(result.left).toMatchObject({ _tag: "UploadTooLargeError", size: 5, maxBytes: 4 });
+    }
+  });
+
+  it("enforces the size limit across chunks and cleans up the partial upload", async () => {
+    const { Live, dir } = makeLive({ maxUploadBytes: 4 });
+    try {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const transfer = yield* FileTransfer;
+          return yield* Effect.either(
+            transfer.upload({
+              filename: "chunked.bin",
+              contentType: "application/octet-stream",
+              content: Stream.fromIterable([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]),
+            }),
+          );
+        }).pipe(Effect.provide(Live), Effect.scoped),
+      );
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        expect(result.left).toMatchObject({
+          _tag: "UploadTooLargeError",
+          size: 5,
+          maxBytes: 4,
+        });
+      }
+      expect(readdirSync(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the blob when metadata persistence fails", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "trail-compensation-"));
+    const ConfigTest = Layer.succeed(AppConfig, {
+      uploadDir: dir,
+      maxUploadBytes: 1024,
+      ttlMs: 60_000,
+      storageDriver: "local" as const,
+      sweepIntervalMs: 60_000,
+      s3: {
+        bucket: "unused",
+        region: "us-east-1",
+        endpoint: undefined,
+        pathStyle: false,
+        prefix: "trail",
+        downloadUrlTtlMs: 3_600_000,
+      },
+    });
+    const failingMeta: TransferMetaService = {
+      list: () => Effect.succeed([]),
+      find: () => Effect.succeed(undefined),
+      upsert: () => Effect.fail(new MetaError({ op: "write", cause: "test failure" })),
+      update: (id) => Effect.fail(new MetaError({ op: "write", cause: id })),
+      remove: () => Effect.succeed(undefined),
+    };
+    const Live = FileTransferLive.pipe(
+      Layer.provide(Layer.succeed(TransferMeta, failingMeta)),
+      Layer.provide(FileStorageLive),
+      Layer.provide(ConfigTest),
+      Layer.provide(NodeContext.layer),
+    );
+
+    try {
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const transfer = yield* FileTransfer;
+          return yield* Effect.either(uploadBytes(transfer, [1, 2, 3]));
+        }).pipe(Effect.provide(Live), Effect.scoped),
+      );
+      expect(result._tag).toBe("Left");
+      expect(readdirSync(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

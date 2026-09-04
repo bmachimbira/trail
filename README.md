@@ -69,8 +69,9 @@ aws s3api put-bucket-lifecycle-configuration --bucket <bucket> --lifecycle-confi
 }'
 ```
 
-Uploads still pass through the app server (multipart form, bounded by
-`MAX_UPLOAD_MB`); direct browser→S3 presigned PUTs are the natural next step.
+Uploads still pass through the app server (multipart form, streamed directly
+into storage, and bounded by `MAX_UPLOAD_MB`); direct browser→S3 presigned
+PUTs are the natural next step.
 
 ## HTTP API
 
@@ -141,7 +142,11 @@ npm test
 ## Notes / limits
 
 - Single-process store (metadata cached in memory, persisted per mutation).
-- Downloads are buffered, not streamed — `MAX_UPLOAD_MB` doubles as the
-  practical memory bound. Streaming via `Stream` is a natural next step.
+- Uploads and local downloads are streamed; the upload limit is enforced while
+  chunks are consumed, and oversized uploads are aborted with `413`. Local
+  blobs are written to a temporary file and renamed into place after a
+  successful stream. S3 uses a streamed `PutObject` body; S3's per-object
+  `PutObject` replacement semantics provide the metadata write atomicity
+  equivalent there.
 - The in-memory cache relies on layer memoization: one `ManagedRuntime` per
   process is shared by all routes (global singleton in `runtime.ts`).
